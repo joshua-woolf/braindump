@@ -25,8 +25,13 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-async function command(args: string[]) {
-  const child = Bun.spawn(args, { cwd: dir, stdout: "pipe", stderr: "pipe" });
+async function command(args: string[], env = process.env) {
+  const child = Bun.spawn(args, {
+    cwd: dir,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -44,15 +49,22 @@ async function lintFixture(source: string, file = "example.ts") {
     }),
   );
   writeFileSync(join(dir, file), source);
-  return command([
-    process.execPath,
-    join(repo, "node_modules/.bin/oxlint"),
-    "--config",
-    join(dir, ".oxlintrc.json"),
-    "--type-aware",
-    "--deny-warnings",
-    file,
-  ]);
+  const result = await command(
+    [
+      process.execPath,
+      join(repo, "node_modules/.bin/oxlint"),
+      "--config",
+      join(dir, ".oxlintrc.json"),
+      "--type-aware",
+      "--deny-warnings",
+      "--format=json",
+      file,
+    ],
+    // Exercise CI detection without inheriting agent-specific formatter overrides.
+    { PATH: process.env.PATH, CI: "true", GITHUB_ACTIONS: "true" },
+  );
+  const report: unknown = JSON.parse(result.output);
+  return { ...result, report };
 }
 
 describe("repository standards reject violations", () => {
@@ -104,26 +116,41 @@ describe("repository standards reject violations", () => {
       "export {};\nasync function work() { return 1; }\nwork();\n",
     );
     expect(bad.code).toBe(1);
-    expect(bad.output).toContain("no-floating-promises");
+    expect(bad.report).toMatchObject({
+      diagnostics: [
+        { code: "typescript(no-floating-promises)", severity: "error" },
+      ],
+    });
     const good = await lintFixture(
       "export {};\nasync function work() { return 1; }\nvoid work().catch(() => {});\n",
     );
     expect(good.code).toBe(0);
+    expect(good.report).toMatchObject({ diagnostics: [] });
   });
-  test("Bun test lint rejects focused, skipped and todo tests including aliases", async () => {
+  test("Bun test lint rejects focused, skipped and todo tests including aliases under GitHub Actions", async () => {
     const result = await lintFixture(
       'import { test as check, expect } from "bun:test";\ncheck.only("focused", () => { expect(1).toBe(1); });\ncheck["skip"]("skipped", () => { expect(1).toBe(1); });\ncheck.todo("later");\n',
       "tests/example.test.ts",
     );
     expect(result.code).toBe(1);
-    expect(result.output).toContain("Do not focus tests");
-    expect(result.output).toContain("Do not skip tests");
-    expect(result.output).toContain("Implement tests before adding them");
+    expect(result.report).toMatchObject({
+      diagnostics: [
+        "Do not focus tests in the default suite.",
+        "Do not skip tests in the default suite.",
+        "Implement tests before adding them to the default suite.",
+      ].map((help) => ({
+        code: "eslint(no-restricted-properties)",
+        severity: "error",
+        filename: "tests/example.test.ts",
+        help,
+      })),
+    });
     const good = await lintFixture(
       'import { test, expect } from "bun:test";\ntest("runs", () => { expect(1).toBe(1); });\n',
       "tests/example.test.ts",
     );
     expect(good.code).toBe(0);
+    expect(good.report).toMatchObject({ diagnostics: [] });
   });
   test("module boundaries reject forbidden imports, re-exports and dynamic imports", () => {
     const bad = importBoundaryIssues(
