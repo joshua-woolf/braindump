@@ -1,0 +1,10 @@
+/node_modules/
+/data/
+/.browsers/
+/dist/
+/coverage/
+/scraper/.venv/
+**/__pycache__/
+**/.ruff_cache/
+/bun.lock
+/scraper/uv.lock

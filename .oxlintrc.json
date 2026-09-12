@@ -1,0 +1,58 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "jsx-a11y", "import"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "no-debugger": "error",
+    "eqeqeq": ["error", "always"],
+    "no-empty": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/no-floating-promises": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    "react/set-state-in-effect": "off",
+    "react/purity": "off",
+    "jsx-a11y/alt-text": "error",
+    "jsx-a11y/label-has-associated-control": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/tests/**/*.test.ts"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          {
+            "property": "only",
+            "message": "Do not focus tests in the default suite."
+          },
+          {
+            "property": "skip",
+            "message": "Do not skip tests in the default suite."
+          },
+          {
+            "property": "todo",
+            "message": "Implement tests before adding them to the default suite."
+          },
+          {
+            "property": "skipIf",
+            "message": "Default tests must run on every supported environment."
+          },
+          {
+            "property": "runIf",
+            "message": "Default tests must run on every supported environment."
+          }
+        ]
+      }
+    }
+  ]
+}

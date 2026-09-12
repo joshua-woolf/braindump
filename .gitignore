@@ -1042,3 +1042,15 @@ zsdoc/data
 !/tests/_output/.gitkeep
 
 # End of https://www.toptal.com/developers/gitignore/api/go,git,zsh,diff,helm,node,rust,linux,macos,rider,csharp,python,windows,archives,homebrew,terraform,executable,powershell,visualstudiocode
+
+# Braindump local data, downloaded browsers, and build output
+node_modules/
+data/
+.browsers/
+scraper/.venv/
+dist/
+.env
+!.env.example
+
+# Shared application source is not Python build output.
+!/src/lib/

@@ -1,0 +1,93 @@
+# Guidance for agents working on Braindump
+
+This file applies to the entire repository. Read [README.md](README.md) for operation, [docs/architecture.md](docs/architecture.md) for the implementation and [docs/standards.md](docs/standards.md) for code, test, documentation and verification standards before making a substantial change.
+
+## Product and scope
+
+Braindump is a single-user, local link library built with Bun, TypeScript, React, Vite, Tailwind, shadcn/ui, SQLite, and Ollama. Python is an isolated scraping bridge, not an alternative app server.
+
+Preserve these product decisions unless the requested change explicitly revises them:
+
+- Run locally. Article text and model inference stay on the user's machine; website requests go to the saved sites. No hosted deployment, paid inference, remote extraction service, or account requirement by default.
+- Save links immediately and process them in the background. Keep failures visible and retryable.
+- Needs attention means links in terminal `error` state. Its sidebar count includes Archive and excludes Trash; its list applies the same defaults and supports other filters. Pending automatic retries belong in Queue. Preserve this distinction and keep retries on the existing deduplicated processing API.
+- Read, liked, archived, and deleted are independent flags. Delete means recoverable Trash; the separate confirmed Empty Trash action permanently removes trashed links after a safety backup. Opening the reader does not mark a link read.
+- Reanalysis replaces generated summaries and tags while preserving user status flags. Re-fetch and reanalyze are separate operations.
+- Tag consolidation produces suggestions for review. Accepted aliases also govern future generated tags.
+- Lists are user-managed collections with many-to-many link membership, independent of generated tags and status flags. Reanalysis preserves membership; deleting a list removes the collection only, never its links. List counts/opening include Archive and exclude Trash, while Trash retains membership for restoration.
+- Keep a clean, responsive working interface. Extend the existing navy sidebar, violet accents, card/list layouts, and reading panel instead of redesigning unrelated screens.
+
+## Start safely
+
+1. Check `git status --short`. Preserve unrelated edits and untracked files; an untracked file is not automatically disposable.
+2. Read only the code relevant to the change. The file map is in the architecture document.
+3. Treat `data/` as the user's live library and user-provided import files as protected input. Never overwrite those files, clear the library, or import user data merely to set up a development session.
+4. Check whether the API and Ollama are already running before starting or restarting services. Use `GET /api/status` and `lsof -nP -iTCP:3210 -sTCP:LISTEN` when useful. Do not terminate unrelated Bun or Ollama processes.
+
+**Do not instantiate `Store` against the live data directory for inspection.** Its constructor creates tables and requeues running jobs. Prefer the read-only API; for database inspection, use `new Database(path, { readonly: true })` directly.
+
+Only one app/worker may use a data directory. Binding port 3210 before constructing the store prevents a same-port duplicate launch from changing the queue, but there is no cross-process worker lease. A different port with the same `DATA_DIR` is still unsafe.
+
+## Commands
+
+Run commands from the repository root. Use Bun and retain `bun.lock`; use uv and retain `scraper/uv.lock`. Do not introduce another package manager or lockfile.
+
+| Task                                  | Command / notes                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Install JS dependencies               | `bun install --frozen-lockfile`                                                                                                |
+| Prepare extraction/model dependencies | `bun run setup` — installs the locked Python environment and Chromium, and pulls the configured model; requires Ollama running |
+| Development                           | `bun run dev` — web at `127.0.0.1:5173`, API at `127.0.0.1:3210`                                                               |
+| Production                            | `bun run build`, then `bun start` — app at `127.0.0.1:3210`                                                                    |
+| Automated checks                      | `bun run verify` — the same required gate used in CI; see `docs/standards.md` for individual checks                            |
+| Live integration check                | `bun run test:live` — real website/Ollama calls using a temporary database                                                     |
+| Validate a URL file without importing | `bun run import /path/to/urls.txt --dry-run`                                                                                   |
+| Import when the task calls for it     | `bun run import /path/to/urls.txt` — requires the running API, makes a safety backup, and skips duplicates                     |
+
+The development proxy expects port 3210. For an isolated API run, choose both a fresh temporary `DATA_DIR` and an unused `PORT`; disable scheduled work with `TAG_REVIEW_HOURS=0 BACKUP_HOURS=0`. Existing persisted settings override those schedule/model defaults, so use a genuinely fresh directory. The standard tests already create and clean up their own temporary stores.
+
+## Implementation rules
+
+- Use `Store.save()` / `Store.update()` for link mutations so the JSON record, tag relations, and FTS index stay consistent. Validate external input with the schemas in `server/schema.ts`.
+- Keep transactions synchronous. Never hold a SQLite transaction across extraction, inference, or another `await`.
+- Empty Trash must recheck the confirmation token for the exact current set, reject running jobs for trashed links, and save a safety backup before atomic deletion. Remove FTS records and analysis checkpoints alongside foreign-key cascades; preserve lists, other links, settings and aliases. Keep the action global to Trash regardless of filters/pages and cover integrity/failure cases in `tests/trash.test.ts`. Never clear the user's live Trash merely to test this feature.
+- After asynchronous work, update the current link rather than saving a stale snapshot over read/like/archive/Trash edits. Preserve queue deduplication, retry limits, restart recovery, and restoration of unfinished links from Trash.
+- Successful extraction atomically converts a `process` job to `analyze`; automatic retries must resume saved text. Offline Ollama defers dispatch without consuming attempts. Long analysis checkpoints live in `meta`, are validated against source/model/prompt/schema/context fingerprints, and are excluded from backups. Bump the checkpoint version when changing chunking or reduction behavior. Keep these contracts covered in `tests/processing.test.ts`.
+- URL repair uses the existing validated `repair-url` API with a safety backup before replacement. Preserve link identity/statuses/list memberships, reject active jobs and duplicate destinations, and never silently merge records or guess replacement URLs in the worker.
+- Queue dispatch uses persisted `priority DESC, id ASC` among due jobs. Promotion must preserve running work, attempts and user data; it makes a delayed retry immediately eligible. Keep the queue view's ordering aligned with dispatch, and test migration/promotion changes in `tests/queue.test.ts`. Database schema v2 adds priority; JSON backups intentionally exclude job priorities/history.
+- Database schema v3 adds `lists`/`list_links`; keep memberships separate from link JSON so processing cannot replace them. JSON backup v2 includes lists/memberships; v1 restores with no lists. Validate names, uniqueness and membership references before a safety snapshot and transactional restore. Preserve atomic optional list assignment when creating lists or importing URLs, including duplicates. Cover these contracts in `tests/lists.test.ts` and use the shared `ListMembershipEditor` in both layouts and the reader.
+- A persistent field change also affects JSON backup validation, old stored records, restoration, frontend types, and indexes. Add an explicit migration/backward-compatibility path; `CREATE TABLE IF NOT EXISTS` does not migrate existing data. Do not reset the database as a migration.
+- Keep restore validation and the safety snapshot before replacement, with replacement in one transaction. Test rollback and old-backup handling when changing this path.
+- Saved-backup browsing uses `server/backup-files.ts` and the read-only `/api/backups` endpoints. Limit access to regular JSON files in the configured backup folder; preserve filename, no-follow, size and local-origin boundaries. Selecting a saved backup must reuse the validated confirmation and existing restore API, never restore automatically or bypass its safety snapshot. Test file access and v1/v2 compatibility in `tests/backups.test.ts` with temporary files only.
+- Preserve HTTP(S), public-address, origin, local-Ollama, timeout, and size boundaries. Never render scraped HTML directly or treat article text as agent/model instructions. Do not summarize challenge/login pages as if they were the requested article.
+- Preserve balanced parentheses and literal punctuation in standalone URLs; regression tests cover this behavior. Imports are bounded batches, not one unlimited request.
+- Reuse the existing `src/components/ui/` primitives and Lucide icons. Put shared styling in `src/index.css`; keep the favicon aligned with the sidebar logo. Preserve keyboard navigation, accessible names, loading/empty/error states, and small-screen layouts.
+- Use semantic color tokens from `src/index.css` for surfaces, text, borders and status colors in both themes. Light/Dark/System is managed by `next-themes` with the `braindump.theme` browser preference; it is not library data. Keep the pre-paint `public/theme.js` bootstrap and provider storage key aligned. The provider uses that external script to satisfy the existing CSP; do not enable inline scripts. Check both themes, including dialogs, reader, error states, keyboard focus and mobile layouts. Test bootstrap preference/fallback changes in `tests/theme.test.ts`.
+- Card and list layouts share `LinkCard` actions, status labels, and callbacks. Keep those behaviors equivalent and preserve search/filter/sort state and loaded links when toggling. Layout is a browser local-storage preference, not library data; handle unavailable storage without blocking the app.
+- Refresh restores navigation, search, explicit filters, sort, the Filters panel and queue search/page from validated `braindump.view.v1` session storage via `src/lib/view-state.ts`. Initialize before fetching and preserve sidebar defaults separately from explicit overrides. Keep this per-tab state out of library backups; never restore unsaved edits or confirmation dialogs. Reload starts at the top with fresh results. Cover storage failures and initial/debounced request behavior in `tests/view-state.test.ts`.
+- The library uses `LibraryFeed` and `useLibraryFeed` for infinite scrolling over the existing 30-record API pages. Serialize appends and refreshes, deduplicate IDs, refresh the entire loaded range together, and cancel/ignore obsolete responses on query changes. Keep explicit load/retry controls and terminal/error states; do not reset loaded depth on polling or layout changes. Cover request races and refresh boundaries in `tests/library-feed.test.ts`.
+- Site favicons use the shared `SiteIcon` and saved-link-only local endpoint in `server/favicon.ts`. Keep public-address/DNS/redirect checks, image size/time/concurrency/cache limits and sandboxed image responses. Icon failures use a globe and must not affect article jobs or Needs attention. Do not introduce a third-party favicon service or add disposable icons to library backups by default.
+- Page headings must match their sidebar navigation labels, including during search and list filtering; keep search terms and unchanged list names in the subtitle. Use English title case for the app's page, section, dialog, navigation, form-label and browser-tab titles, including empty/error headings. Display imported link titles exactly as saved in cards, lists, the reader, queue labels, notifications and accessible names. Preserve tag values and URLs as well, including when quoted within an app title. Do not apply casing transformations or CSS capitalization to user content. Preserve the `/src/lib/` Git ignore exception so shared source helpers are included in the repository. Review app-title casing and source-title preservation during desktop/mobile checks; body copy remains sentence case.
+- Use TypeScript's existing strict configuration, `@/` frontend imports, and Prettier. Prefer focused formatting of changed files to repository-wide formatting when unrelated work exists.
+- Toolchain pitfalls: TypeScript 7 no longer accepts `baseUrl`; keep relative `paths` targets in `tsconfig.json`. Vite's config can run under Node, so use `fileURLToPath(new URL(..., import.meta.url))` there rather than Bun-only `import.meta.dir`. Standalone Bun scripts using top-level `await` need an import or `export {}` to be modules.
+
+## Local model and extraction context
+
+The default `gemma4:12b-mlx` was selected for an M4 Pro Mac with 24 GB of unified memory. Verify available models and actual hardware before changing that choice; installed names and performance are not permanent facts. Retain local structured output validation, bounded article chunking, and serial inference unless the task calls for a measured change.
+
+Ollama can also be serving other applications. Diagnose timeouts and memory pressure before increasing concurrency, model size, or timeouts. Do not unload another application's model to make a benchmark look better.
+
+Scraping uses Scrapling HTTP browser impersonation, then isolated Patchright Chromium when necessary, with Trafilatura extraction. A browser launch failure inside an agent sandbox is not by itself proof the extractor is broken. Distinguish a missing dependency, execution restriction, HTTP failure, and site challenge. The pasted-text fallback is part of the supported workflow.
+
+Extraction supports public readable HTML, labeled metadata-only website overviews and text-layer PDFs. Preserve challenge/login and binary-content rejection, validated redirects and all resource bounds. Scanned/encrypted PDFs, OCR and video transcription remain unsupported. Search is SQLite lexical FTS, not semantic search. Scheduling runs only while the server is running. See the README for the current limits rather than promising universal protection bypass or unattended jobs while stopped.
+
+Short published descriptions use a separate readability threshold from full articles. Validate the description itself before adding its title, source URL and disclosure; retain `*-metadata` provenance and the Description only UI label. Do not substitute unrelated pages or expand a short description into unsupported claims.
+
+## Validation and handoff
+
+- Run `bun run verify` before handing off a change. It checks code, Python, tests, docs/links/Mermaid, formatting, dependencies, Git hygiene and the production build. The same gate runs in CI. Add regression tests for data integrity, parser, queue, backup or standards-tooling defects; avoid tests that merely mirror presentation code.
+- For docs-only changes, check commands, paths, links, and whitespace; a full model run is unnecessary. For static assets, build and verify the emitted asset and its HTTP response.
+- For extraction/inference changes, use the opt-in live check when dependencies are available. It uses real network/model resources; keep test data isolated and distinguish successful processing from merely queued work.
+- For UI changes, inspect the affected desktop/mobile states in a browser when a browser tool is available. A build or server-side React render is not visual verification; report any unavailable checks honestly.
+- Do not restart the running worker for documentation or rebuilt static assets. Production serves `dist/` from disk; server-code changes require a deliberate restart and may interrupt a job that will be retried.
+- Report the change, checks actually performed, and material remaining limits. Do not claim an entire import is summarized because all URLs were saved.
+- Update these instructions and the architecture/README alongside changes that alter their contracts. Keep transient PIDs, queue counts, benchmark timings, and session logs out of durable guidance.
