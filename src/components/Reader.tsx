@@ -26,15 +26,19 @@ import { api } from "@/lib/api";
 import { ListMembershipEditor } from "@/components/ListMembershipEditor";
 import type { Link } from "@/types";
 
-export function Reader({
-  id,
-  close,
-  changed,
-}: {
+type ReaderProps = {
   id: string | null;
   close: () => void;
   changed: () => void;
-}) {
+};
+
+// Each selection owns its state. Late mutations and polls for a closed reader
+// cannot populate another link's reader or change its action targets.
+export function Reader(props: ReaderProps) {
+  return <SelectedReader key={props.id} {...props} />;
+}
+
+function SelectedReader({ id, close, changed }: ReaderProps) {
   const [link, setLink] = useState<Link | null>(null);
   const [busy, setBusy] = useState(false);
   const [paste, setPaste] = useState("");

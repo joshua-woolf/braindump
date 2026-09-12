@@ -65,10 +65,9 @@ try {
   const toggle = browser.document.querySelector("button")!;
   assert.equal(select.value, "system");
   assert.equal(selectedTheme(), "light");
-  assert.equal(
-    browser.document.querySelector("script")?.getAttribute("src"),
-    "/theme.js",
-  );
+  const providerScript = browser.document.querySelector("script")!;
+  assert.equal(providerScript.getAttribute("type"), "text/plain");
+  assert.equal(providerScript.hasAttribute("src"), false);
 
   await act(async () => toggle.click());
   assert.equal(selectedTheme(), "dark");

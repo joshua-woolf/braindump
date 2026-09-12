@@ -1,7 +1,34 @@
 import { z } from "zod";
+import { MAX_URL_LENGTH } from "./urls";
 
 export const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
 export type SavedBackup = { name: string; size: number; modifiedAt: string };
+export const createBackupSchema = z.object({}).strict();
+export const backupDirectorySchema = z
+  .object({
+    directory: z
+      .string()
+      .trim()
+      .min(1)
+      .max(4096)
+      .refine(
+        (value) =>
+          value
+            .split("")
+            .every(
+              (character) =>
+                character.charCodeAt(0) >= 32 &&
+                character.charCodeAt(0) !== 127,
+            ),
+        "Folder paths cannot contain control characters.",
+      ),
+  })
+  .strict();
+export type BackupDirectoryResult = {
+  directory: string;
+  moved: number;
+  leftBehind: string[];
+};
 
 export const tagName = z
   .string()
@@ -14,7 +41,7 @@ export const emptyTrashSchema = z
   .strict();
 export const linkSchema = z.object({
   id: z.string().uuid(),
-  url: z.string().url().max(8192),
+  url: z.string().url().max(MAX_URL_LENGTH),
   title: z.string().max(1000),
   description: z.string().max(5000),
   content: z.string().max(1_000_000),

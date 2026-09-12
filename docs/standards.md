@@ -8,13 +8,17 @@ Use Bun for JavaScript dependencies and commands, and uv for Python. Keep `bun.l
 
 `package.json` pins the Bun version in `packageManager`; CI reads that value. CI also pins uv and selects Python 3.13, matching the setup script. GitHub Actions use full commit SHAs, with the release family recorded in a comment. Verify those SHAs against the upstream repository when updating them.
 
+Dependency refreshes use `bun update --latest` and `uv lock --project scraper --upgrade`, after checking direct Python requirements for newer stable releases. Sync the Python environment, run `bun audit`, and complete `bun run verify`; an unchanged direct version does not mean its transitive dependencies are current. Keep upstream compatibility constraints unless an override has a concrete reason and validation.
+
+As of 12 September 2026, `package.json` overrides `lodash-es` to 4.18.1 and `smol-toml` to 1.8.0 because the latest Mermaid/Chevrotain and Markdownlint dependencies still select vulnerable releases. These address [Lodash template injection](https://github.com/advisories/GHSA-r5fr-rjxr-66jc), [Lodash prototype pollution](https://github.com/advisories/GHSA-f23m-r3pf-42rh), and [smol-toml denial of service](https://github.com/advisories/GHSA-7w5x-hrqm-74c2). Both overrides affect development tooling; the documentation checks exercise their consumers. Remove the overrides once upstream resolves patched versions without them. Python's `pyee` stays on 13.0.1 because the current Playwright and Patchright releases require `<14`; do not force version 14 past that constraint.
+
 ```sh
 bun install --frozen-lockfile
 uv sync --locked --project scraper --python 3.13
 bun run verify
 ```
 
-`verify` stops at the first failure and exits nonzero. It checks lockfiles, repository rules, formatting, TypeScript/React/accessibility lint, Markdown style, local document links and anchors, Mermaid syntax, Python lint, Bun tests, Python tests, and the production build/typecheck. It does not start the app, import user data, launch a browser, or call a model. Dependency checks may contact package registries; application integration tests use temporary data and no live services.
+`verify` stops at the first failure and exits nonzero. It checks lockfiles, JavaScript security advisories with `bun audit`, repository rules, formatting, TypeScript/React/accessibility lint, Markdown style, local document links and anchors, Mermaid syntax, Python lint, Bun tests, Python tests, and the production build/typecheck. It does not start the app, import user data, launch a browser, or call a model. Dependency checks may contact package registries; application integration tests use temporary data and no live services. The default Python transport tests bind disposable loopback servers; they make no external website requests.
 
 Use `bun run format` to apply Prettier and Ruff formatting. To avoid unrelated changes during focused work, use `bunx --no-install prettier --write path/to/file.ts` or `uv run --locked --project scraper ruff format path/to/file.py`. Formatting is mechanical; review the diff before handoff. `bun run verify` checks without rewriting maintained files or lockfiles.
 
@@ -60,7 +64,11 @@ Write tests for observable behavior and failure cases. Name each test as a sente
 - For persistence changes, cover index consistency, status preservation, old records/backups, rollback and migrations as applicable. Lists must keep memberships through reanalysis/status edits, reject duplicate names and dangling backup references, and preserve links when a list is deleted; `tests/lists.test.ts` verifies these contracts. For queue changes, cover ordering, retries, deduplication and recovery. For parsers/network code, cover malformed input, limits and rejected destinations. For standards tooling, include invalid fixtures that prove rejection.
 - Do not add snapshots of large generated output, tests of private implementation details, or tests that merely restate a CSS/JSX change. Use browser inspection for presentation changes and behavior tests where an interaction has meaningful logic.
 
-There is no arbitrary coverage percentage. Review checks whether the changed behavior and its important failure modes are covered. Passing tests do not prove an entire imported library has been summarized.
+`bun run test:coverage` runs both offline suites with coverage and is included in `bun run verify`, so CI prints the reports without running the suites twice. `bun run test:coverage:bun` and `bun run test:coverage:python` run either side independently. Bun writes `coverage/bun/lcov.info`; Coverage.py writes `coverage/python/html/index.html` and `coverage/python/coverage.json`. Coverage.py is a locked development dependency, used because Bun cannot instrument Python. Generated coverage files stay out of Git.
+
+Bun measures only source modules loaded in its test process, excluding test helpers via `bunfig.toml`. It does not include browser-only components, unimported entry points, the theme bootstrap evaluated in a VM, or source exercised by subprocess fixtures. Python measures the scraper's statements and branches, excluding test code via `scraper/pyproject.toml`. Compare the same file set before and after a change and report these scope limits; never present the Bun total as whole-application coverage. Do not exclude production code just to improve a percentage.
+
+There is no arbitrary coverage percentage. Review checks whether the changed behavior and its important failure modes are covered. `bun run test:browser` checks actual Chromium against disposable local servers for extraction transport changes; it is separate from the default browser-free suite. High coverage from fake transports does not prove real DNS, redirects or browser behavior; retain the applicable live and visual checks. Passing tests do not prove an entire imported library has been summarized.
 
 ## Documentation
 
@@ -81,14 +89,14 @@ Describe current behavior and limits. Give exact commands and repository-relativ
 
 ## Enforcement and review evidence
 
-| Standard                                   | Automated enforcement                                                                                     | Review evidence still needed                                                          |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Formatting and file conventions            | Prettier, Ruff, `.editorconfig`, `check:repo`                                                             | Appropriate module ownership and readable names                                       |
-| TypeScript, promises, hooks, accessibility | Strict typecheck and Oxlint with type-aware rules; warnings fail                                          | Correct behavior, meaningful error handling and keyboard/mobile usability             |
-| Tests                                      | Bun, Python unittest, focused/disabled-test property lint, invalid-fixture tests for tooling              | Assertions cover the change; fixtures are isolated; default tests avoid live services |
-| Documentation                              | Markdownlint, AST-based local link/anchor checks and Mermaid parsing                                      | Accurate contracts, useful prose and readable rendered diagrams                       |
-| Dependencies and Git hygiene               | Frozen/check-only lock checks, exact JS pins, ignored-source and tracked-data checks                      | Dependency justification and upstream action-SHA verification                         |
-| CI                                         | Push/PR workflow using `bun run verify`, read-only permissions and pinned actions; workflow-policy checks | Hosted run result and repository branch protection                                    |
+| Standard                                   | Automated enforcement                                                                                        | Review evidence still needed                                                          |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Formatting and file conventions            | Prettier, Ruff, `.editorconfig`, `check:repo`                                                                | Appropriate module ownership and readable names                                       |
+| TypeScript, promises, hooks, accessibility | Strict typecheck and Oxlint with type-aware rules; warnings fail                                             | Correct behavior, meaningful error handling and keyboard/mobile usability             |
+| Tests                                      | Bun and Coverage.py/unittest reports, focused/disabled-test property lint, invalid-fixture tests for tooling | Assertions cover the change; fixtures are isolated; default tests avoid live services |
+| Documentation                              | Markdownlint, AST-based local link/anchor checks and Mermaid parsing                                         | Accurate contracts, useful prose and readable rendered diagrams                       |
+| Dependencies and Git hygiene               | Frozen/check-only lock checks, Bun dependency audit, exact JS pins, ignored-source and tracked-data checks   | Dependency justification and upstream action-SHA verification                         |
+| CI                                         | Push/PR workflow using `bun run verify`, read-only permissions and pinned actions; workflow-policy checks    | Hosted run result and repository branch protection                                    |
 
 The [PR template](../.github/pull_request_template.md) records the change, automated result and applicable manual evidence. UI changes need desktop/mobile inspection and keyboard checks; extraction/model changes need the isolated live check when dependencies are available. Report any unavailable verification explicitly. Never treat a build as visual verification or claim a live check passed when work was only queued.
 

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AppearanceSettings } from "@/components/Appearance";
 import { SavedBackups } from "@/components/SavedBackups";
+import { BackupFolder } from "@/components/BackupFolder";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,8 @@ export function SettingsPage({
   const backupListCount = backup?.version === 2 ? backup.lists.length : 0;
   const [openingBackup, setOpeningBackup] = useState<string | null>(null);
   const [backupRevision, setBackupRevision] = useState(0);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+  const [backupError, setBackupError] = useState("");
   const preparation = useRef<AbortController | null>(null);
   const cancelRestore = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState("");
@@ -90,6 +93,22 @@ export function SettingsPage({
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
+      setBusy(false);
+    }
+  }
+  async function createBackup() {
+    if (busy) return;
+    setBusy(true);
+    setCreatingBackup(true);
+    setBackupError("");
+    try {
+      await api<{ backup: string }>("/backups", "POST", {});
+      setBackupRevision((value) => value + 1);
+      toast.success("Backup created");
+    } catch (e) {
+      setBackupError(`Couldn’t create backup. ${(e as Error).message}`);
+    } finally {
+      setCreatingBackup(false);
       setBusy(false);
     }
   }
@@ -235,15 +254,29 @@ export function SettingsPage({
             <h2 className="font-semibold">Backup & Restore</h2>
           </div>
           <p className="mb-5 text-sm leading-7 text-muted-foreground">
-            Download your complete library: links, saved article text,
-            summaries, tags, read states, likes, archives, Trash, and settings.
-            Keep a copy on another drive for safekeeping.
+            Save a backup on this Mac or download your complete library: links,
+            saved article text, summaries, tags, lists, read states, likes,
+            archives, Trash, and settings. Keep a copy on another drive for
+            safekeeping.
           </p>
+          <BackupFolder
+            busy={busy}
+            setBusy={setBusy}
+            onMoved={() => setBackupRevision((value) => value + 1)}
+          />
           <div className="flex flex-wrap gap-3">
+            <Button disabled={busy} onClick={() => void createBackup()}>
+              {creatingBackup ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <HardDrive />
+              )}
+              {creatingBackup ? "Creating Backup…" : "Create Backup"}
+            </Button>
             <Button asChild variant="outline">
               <a href="/api/backup" download>
                 <Download />
-                Download backup
+                Download Backup
               </a>
             </Button>
             <Button
@@ -252,7 +285,7 @@ export function SettingsPage({
               onClick={() => file.current?.click()}
             >
               <Upload />
-              Restore backup
+              Restore Backup
             </Button>
             <input
               ref={file}
@@ -273,14 +306,19 @@ export function SettingsPage({
               }}
             />
           </div>
+          {backupError && (
+            <p role="alert" className="mt-3 text-sm text-danger">
+              {backupError}
+            </p>
+          )}
           {openingBackup && (
             <output className="mt-3 block break-all text-sm text-muted-foreground">
               Opening {openingBackup}…
             </output>
           )}
           <p className="mt-5 text-xs leading-6 text-muted-foreground">
-            Automatic backups: data/backups/ · The latest 14 automatic copies
-            are kept.
+            Manual copies are kept until you remove them; the latest 14
+            automatic copies are kept.
             <br />
             Last automatic backup:{" "}
             {status?.lastBackup
@@ -381,8 +419,8 @@ export function SettingsPage({
               {backup?.version === 1
                 ? "Older backups have no lists; your current lists will be removed. "
                 : ""}
-              A safety copy of the current library is saved in data/backups/
-              before restoration.
+              A safety copy of the current library is saved in your backup
+              folder before restoration.
             </DialogDescription>
           </DialogHeader>
           <p className="break-all text-xs text-muted-foreground">

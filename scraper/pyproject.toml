@@ -3,6 +3,7 @@ name = "braindump-scraper"
 version = "0.1.0"
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "curl-cffi>=0.16.3,<0.17",
     "pypdf>=6.18.1,<7",
     "scrapling[fetchers]>=0.4,<0.5",
     "trafilatura>=2,<3",
@@ -17,5 +18,23 @@ select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
 
 [dependency-groups]
 dev = [
-    "ruff==0.16.6",
+    "coverage==7.16.0",
+    "ruff==0.16.7",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["scraper"]
+omit = ["scraper/tests/*"]
+data_file = "coverage/python/.coverage"
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+precision = 2
+
+[tool.coverage.html]
+directory = "coverage/python/html"
+
+[tool.coverage.json]
+output = "coverage/python/coverage.json"

@@ -3,6 +3,7 @@ import {
   constants,
   fstatSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readSync,
   readdirSync,
@@ -39,8 +40,8 @@ function validName(name: string) {
   );
 }
 
-function directory(dataDir: string) {
-  const dir = join(dataDir, "backups");
+export function backupDirectory(dir: string, create = false) {
+  if (create) mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
     const stat = lstatSync(dir);
     if (!stat.isDirectory() || stat.isSymbolicLink())
@@ -55,8 +56,8 @@ function directory(dataDir: string) {
   }
 }
 
-export function listBackups(dataDir: string): SavedBackup[] {
-  const dir = directory(dataDir);
+export function listBackups(backupDir: string): SavedBackup[] {
+  const dir = backupDirectory(backupDir);
   if (!dir) return [];
   const backups: SavedBackup[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -80,10 +81,10 @@ export function listBackups(dataDir: string): SavedBackup[] {
   );
 }
 
-export function readBackup(dataDir: string, name: string) {
+export function readBackup(backupDir: string, name: string) {
   if (!validName(name))
     throw new BackupFileError("Invalid backup filename.", 400);
-  const dir = directory(dataDir);
+  const dir = backupDirectory(backupDir);
   if (!dir)
     throw new BackupFileError("Backup not found. Refresh the list.", 404);
   const path = join(dir, name);

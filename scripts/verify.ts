@@ -1,13 +1,13 @@
 const checks = [
   "check:locks",
+  "check:audit",
   "check:repo",
   "format:check",
   "lint",
   "lint:docs",
   "check:docs",
   "check:python",
-  "test",
-  "test:python",
+  "test:coverage",
   "build",
 ];
 for (const check of checks) {

@@ -425,3 +425,34 @@ describe("API boundaries", () => {
     ).toBe(409);
   });
 });
+
+test("normalized URL bounds preserve backup round trips and reject an entire invalid batch", async () => {
+  const { MAX_URL_LENGTH } = await import("../server/urls");
+  const { backupSchema } = await import("../server/schema");
+  const prefix = "https://example.com/";
+  const boundary = prefix + "a".repeat(MAX_URL_LENGTH - prefix.length);
+  expect(normalizeUrl(boundary)).toBe(boundary);
+  expect(() => normalizeUrl(boundary + "a")).toThrow("8192");
+  const encoded = prefix + "é".repeat(1400);
+  expect(encoded.length).toBeLessThan(MAX_URL_LENGTH);
+  expect(() => normalizeUrl(encoded)).toThrow("8192");
+  expect(parseLinkFile(encoded).invalid).toHaveLength(1);
+  const api = createApi(store, new Worker(store));
+  const add = (text: string) =>
+    api(
+      new Request("http://127.0.0.1:3210/api/links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }),
+    );
+  expect((await add(`${prefix}valid\n${encoded}`)).status).toBe(400);
+  expect(store.all()).toHaveLength(0);
+  expect((await add(boundary)).status).toBe(201);
+  const backup = backupSchema.parse(store.export());
+  store.restore(backup);
+  expect(store.all()[0].url).toBe(boundary);
+  backup.links[0].url = encoded;
+  expect(() => store.restore(backup)).toThrow("8192");
+  expect(store.all()[0].url).toBe(boundary);
+});

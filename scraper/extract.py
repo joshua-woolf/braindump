@@ -1,28 +1,38 @@
 """One-shot public-page extraction. Diagnostics on stderr, JSON on stdout."""
 
-import ipaddress
 import json
 import logging
 import re
-import socket
 import sys
 from io import BytesIO
 from urllib.parse import urljoin, urlparse
 
 import trafilatura
 from lxml import html as lxml_html
-from pypdf import PdfReader
-from scrapling.fetchers import Fetcher, StealthyFetcher
+from pypdf import PdfReader, apply_configuration
+
+if __package__:
+    from .transport import (
+        MAX_HTML,
+        MAX_PDF,
+        UnsupportedContent,
+        fetch_browser,
+        fetch_page,
+        public_url,
+    )
+else:
+    from transport import (
+        MAX_HTML,
+        MAX_PDF,
+        UnsupportedContent,
+        fetch_browser,
+        fetch_page,
+        public_url,
+    )
 
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
-MAX_HTML = 8_000_000
-MAX_PDF = 20_000_000
 MAX_TEXT = 1_000_000
 MAX_PDF_PAGES = 500
-
-
-class UnsupportedContent(ValueError):
-    """A browser retry cannot turn this response into supported text."""
 
 
 def reject_gate(title, text):
@@ -123,6 +133,20 @@ def reddit_article(tree, url, method):
 
 
 def pdf_article(page):
+    with apply_configuration(
+        maximum_declared_stream_length=MAX_PDF,
+        array_based_stream_maximum_output_length=MAX_HTML,
+        zlib_maximum_output_length=MAX_HTML,
+        lzw_maximum_output_length=MAX_HTML,
+        run_length_maximum_output_length=MAX_HTML,
+        image_maximum_buffer_size=MAX_HTML,
+        jbig2_maximum_output_length=MAX_HTML,
+        xmp_maximum_input_length=MAX_HTML,
+    ):
+        return bounded_pdf_article(page)
+
+
+def bounded_pdf_article(page):
     body = page.body
     if len(body) > MAX_PDF:
         raise UnsupportedContent("PDF exceeds the 20 MB extraction limit.")
@@ -191,27 +215,6 @@ def html_redirect(page):
     except (ValueError, lxml_html.etree.ParserError):
         return None
     return None
-
-
-def public_url(url):
-    parsed = urlparse(url)
-    if (
-        parsed.scheme not in ("https", "http")
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-    ):
-        raise ValueError("Only public HTTP(S) pages are supported.")
-    if parsed.port not in (None, 80, 443):
-        raise ValueError("Only standard public web ports are supported.")
-    addresses = socket.getaddrinfo(
-        parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM
-    )
-    if not addresses or any(
-        not ipaddress.ip_address(a[4][0]).is_global for a in addresses
-    ):
-        raise ValueError("Private and local network addresses are blocked.")
-    return url
 
 
 def article(page, method):
@@ -298,14 +301,7 @@ def extract(url, force_browser=False):
             current = url
             for _ in range(8):
                 public_url(current)
-                page = Fetcher.get(
-                    current,
-                    impersonate="chrome",
-                    stealthy_headers=True,
-                    timeout=25,
-                    retries=0,
-                    allow_redirects=False,
-                )
+                page = fetch_page(current)
                 if 300 <= page.status < 400:
                     location = page.headers.get("location") or page.headers.get(
                         "Location"
@@ -325,29 +321,8 @@ def extract(url, force_browser=False):
         except Exception as error:
             errors.append(str(error))
 
-    # Validate every browser request, including redirects and subresources.
-    def page_setup(page):
-        def guard(route):
-            try:
-                public_url(route.request.url)
-                route.continue_()
-            except Exception:
-                route.abort()
-
-        page.context.route("**/*", guard)
-
     try:
-        page = StealthyFetcher.fetch(
-            url,
-            headless=True,
-            solve_cloudflare=True,
-            timeout=45000,
-            wait=1500,
-            network_idle=False,
-            google_search=False,
-            block_webrtc=True,
-            page_setup=page_setup,
-        )
+        page = fetch_browser(url)
         return article(page, "scrapling-browser")
     except Exception as error:
         errors.append(str(error))

@@ -66,8 +66,8 @@ export function SavedBackups({
         </Button>
       </div>
       <p className="mt-2 text-xs leading-6 text-muted-foreground">
-        Automatic and safety snapshots in data/backups/, newest first. Files are
-        checked before restoration.
+        Manual, automatic and safety snapshots in your backup folder, newest
+        first. Files are checked before restoration.
       </p>
       {error && (
         <p role="alert" className="mt-3 text-sm text-danger">
@@ -83,8 +83,8 @@ export function SavedBackups({
         <div className="py-5">
           <h4 className="text-sm font-medium">No Saved Backups Yet</h4>
           <p className="mt-1 text-sm text-muted-foreground">
-            Automatic and safety backups will appear here when they are created.
-            Download backup saves a copy to your browser’s download folder.
+            Choose Create Backup to save a copy here. Download Backup saves a
+            copy to your browser’s download folder.
           </p>
         </div>
       )}
@@ -108,7 +108,8 @@ export function SavedBackups({
                 </p>
                 {backup.size > MAX_BACKUP_BYTES && (
                   <p className="mt-1 text-xs text-warning">
-                    Over the 256 MB limit. Access this file in data/backups/.
+                    Over the 256 MB limit. Access this file in your backup
+                    folder.
                   </p>
                 )}
                 {backup.size === 0 && (

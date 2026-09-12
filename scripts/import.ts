@@ -1,5 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { parseLinkFile } from "../server/urls";
 import { config } from "../server/config";
 
@@ -29,18 +27,17 @@ if (parsed.invalid.length)
 if (args.includes("--dry-run") || !parsed.urls.length) process.exit(0);
 
 const base = `http://127.0.0.1:${config.port}`;
-const backupResponse = await fetch(`${base}/api/backup`, {
+const backupResponse = await fetch(`${base}/api/backups/before-import`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: "{}",
   signal: AbortSignal.timeout(15000),
 });
 if (!backupResponse.ok)
   throw new Error(
     "Cannot back up the running app. Start it with bun start, then retry.",
   );
-const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const backupDir = join(config.dataDir, "backups");
-mkdirSync(backupDir, { recursive: true, mode: 0o700 });
-const backupPath = join(backupDir, `before-import-${stamp}.json`);
-writeFileSync(backupPath, await backupResponse.text(), { mode: 0o600 });
+const { backup } = (await backupResponse.json()) as { backup: string };
 
 let added = 0;
 let existing = 0;
@@ -69,5 +66,5 @@ for (let i = 0; i < parsed.urls.length; i += 100) {
   );
 }
 console.log(
-  `Import complete. ${added} links added and queued; ${existing} already saved. Safety backup: ${backupPath}`,
+  `Import complete. ${added} links added and queued; ${existing} already saved. Safety backup: ${backup} (in the app's configured backup folder).`,
 );

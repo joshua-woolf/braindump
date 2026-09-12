@@ -12,7 +12,9 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
       value={{ light: "light", dark: "dark" }}
       enableSystem
       disableTransitionOnChange
-      scriptProps={{ src: "/theme.js" }}
+      // index.html owns the synchronous external bootstrap. Keep next-themes'
+      // redundant inline bootstrap inert under React 19.3 and our strict CSP.
+      scriptProps={{ type: "text/plain" }}
     >
       {children}
     </ThemeProvider>

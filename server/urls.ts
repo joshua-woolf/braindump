@@ -1,3 +1,5 @@
+export const MAX_URL_LENGTH = 8192;
+
 export function normalizeUrl(value: string): string {
   const url = new URL(value.trim());
   if (
@@ -26,6 +28,8 @@ export function normalizeUrl(value: string): string {
   for (const key of [...url.searchParams.keys()])
     if (/^utm_/i.test(key) || ["fbclid", "gclid", "msclkid"].includes(key))
       url.searchParams.delete(key);
+  if (url.href.length > MAX_URL_LENGTH)
+    throw new Error(`The normalized URL exceeds ${MAX_URL_LENGTH} characters.`);
   return url.href;
 }
 

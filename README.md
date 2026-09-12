@@ -19,9 +19,9 @@ flowchart TB
     end
 
     DB[("SQLite + FTS5<br/>Links, content, lists, memberships, tags,<br/>statuses, settings and persistent job queue")]
-    Scraper["Python extraction bridge<br/>Scrapling HTTP → Patchright fallback<br/>Trafilatura HTML + pypdf text"]
+    Scraper["Python extraction bridge<br/>Pinned curl HTTP → Patchright fallback<br/>Trafilatura HTML + pypdf text"]
     Ollama["Local Ollama<br/>gemma4:12b-mlx"]
-    Backups["JSON backups<br/>Automatic, downloaded and safety copies"]
+    Backups["JSON backups<br/>Manual, automatic, downloaded and safety copies"]
 
     UI <-->|"Save, search, filter, review and poll"| API
     Import -->|"Add links"| API
@@ -88,9 +88,9 @@ The app must be running for the import. The importer validates every line, remov
 - **Titles:** page headings match their sidebar navigation labels, including during searches or list filtering; search terms and list names appear below the heading. The app's headings, navigation, dialog titles and form labels use English title case. Imported link titles retain their original casing everywhere, including cards, lists, the reader and queue. Source titles, tag values, URLs, search data and backups keep their original text.
 - **Site icons:** cards and list rows show the site's favicon, with a globe when it is unavailable. The local app fetches icons directly from the saved site's origin or its declared icon host, without a third-party favicon service. Existing links work immediately without reprocessing. Icons are cached separately from library data and are fetched again as needed after restart or restore.
 - **Read, like, archive, delete:** each flag is independent. Sidebar views provide defaults; Filters can override each flag, including searches across Archive and Trash. Deletion is reversible soft deletion. There is no automatic emptying of Trash.
-- **Empty Trash:** open Trash and choose **Empty Trash**. The confirmation shows the total across all search/filter results. **Delete Permanently** removes those links, their list memberships and processing jobs after saving a `before-empty-trash` backup in `data/backups/`. Lists and other links are preserved. If Trash changes or one of its links is still processing, review it again before continuing. There is no Undo; recovery uses the full-library restore in Settings & Backups. A permanently removed URL can be saved again.
+- **Empty Trash:** open Trash and choose **Empty Trash**. The confirmation shows the total across all search/filter results. **Delete Permanently** removes those links, their list memberships and processing jobs after saving a `before-empty-trash` backup in the configured backup folder. Lists and other links are preserved. If Trash changes or one of its links is still processing, review it again before continuing. There is no Undo; recovery uses the full-library restore in Settings & Backups. A permanently removed URL can be saved again.
 - **Search:** SQLite FTS5 searches titles, URLs, summaries, article text, and tags, with case-insensitive word prefixes. Multiple words must all match. This is lexical full-text search, not semantic embedding search. Results are paginated in groups of 30.
-- **Reader:** open a link title in either layout for its summary, takeaways, and saved article. Opening a link does not silently change its read status.
+- **Reader:** open a link title in either layout for its summary, takeaways, and saved article. Opening a link does not silently change its read status. Each selection has independent reader state, so a late save or reanalysis response cannot replace another open link.
 - **Queue:** open Queue in the sidebar to see the running job and all waiting jobs, with search, pagination, extraction/model stages, and retry details. **Move to top** makes a waiting item run next after the current job finishes. It also makes a delayed retry eligible immediately, without resetting its attempt count. Priority survives app restarts. This view covers Braindump jobs, not work other applications send to Ollama.
 - **Reprocess:** under Manage, reanalyze saved text or re-fetch the latest page and analyze it. Existing summaries remain visible until the replacement succeeds. Analysis replaces the tags; read/like/archive/Trash flags are preserved.
 - **Correct a URL:** in Manage, edit **Page URL** and choose **Update URL & re-fetch**. A safety backup preserves the old record before replacing its text, summary and tags. The link keeps its identity, statuses and lists. Already-saved destinations are rejected so two records are never silently merged.
@@ -103,7 +103,7 @@ The app must be running for the import. The importer validates every line, remov
 
 Extraction stays on your machine. A small Python bridge uses **Scrapling 0.4.15** and **Trafilatura 2.2.0**:
 
-1. Chrome TLS/browser impersonation through Scrapling's curl-based HTTP fetcher.
+1. Chrome TLS/browser impersonation through a bounded `curl-cffi` transport. Checked DNS addresses are pinned to the actual connection, with hostname/TLS verification preserved and environment proxies disabled.
 2. If the page is blocked, too short, or needs JavaScript, a fresh isolated **Patchright Chromium** session uses Scrapling's stealth fetcher and Cloudflare challenge support.
 3. Trafilatura tries precise article extraction, then standard and recall modes for short landing pages and directories. When only a useful public description is available, the saved content explicitly labels it as a metadata-only website overview. Challenge and login responses are rejected. HTTP and explicit HTML refresh redirects are followed within a bounded, public-address-checked chain.
 4. [pypdf](https://pypdf.readthedocs.io/en/stable/user/extract-text.html) extracts text layers from PDFs locally, with page markers. PDF input is limited to 20 MB, 500 pages, 8 MB of decoded content per page and one million text characters. HTML retains its 8 MB limit. Binary data is rejected before inference, including previously saved raw PDF data; use Re-fetch page to replace it with readable text.
@@ -112,9 +112,9 @@ Cards and lists label metadata-only results **Description only**. The reader exp
 
 Hard CAPTCHAs, login-only pages, subscription access, site changes, IP reputation checks and some non-article pages may still fail. Extraction does not use paid proxy services, remote extraction APIs or personal browser cookies. Scanned/encrypted PDFs and video transcription are not supported; a video's public description is not its transcript. Successful extraction may reflect a directory, website description or only the publicly visible portion of an article. Use the original link and the pasted-text fallback when needed.
 
-HTTP redirects and browser requests are checked against public-network destinations; local/private addresses and nonstandard web ports are rejected. The local API rejects foreign origins and accepts JSON mutations only. This is a single-user local app, not an authenticated network service. Do not expose its port publicly. Source text is treated as untrusted data in prompts and rendered as plain text, never executable HTML.
+HTTP and browser requests use the same DNS-pinned transport; local/private addresses and nonstandard web ports are rejected. Decoded responses are capped while downloading: 8 MB for HTML and browser resources, 20 MB for PDFs. Browser sessions allow at most 100 requests and 40 MB total decoded downloads; images, fonts, media, service workers and WebSockets are blocked. A local deny-only proxy prevents browser traffic outside interception, including loopback traffic. Sites that depend on these blocked features may require pasted text. PDF decoder limits apply before stream expansion, while the subprocess deadline bounds processing time. The local API rejects foreign origins and accepts JSON mutations only. This is a single-user local app, not an authenticated network service. Do not expose its port publicly. Source text is treated as untrusted data in prompts and rendered as plain text, never executable HTML.
 
-Sources checked 9 September 2026: [Scrapling](https://github.com/D4Vinci/Scrapling), [stealth fetcher documentation](https://scrapling.readthedocs.io/en/latest/fetching/stealthy.html), [Trafilatura](https://trafilatura.readthedocs.io/en/latest/).
+Transport sources checked 12 September 2026: [libcurl DNS pinning](https://curl.se/libcurl/c/CURLOPT_RESOLVE.html), [browser routing limitations](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route). Extraction sources checked 9 September 2026: [Scrapling](https://github.com/D4Vinci/Scrapling), [stealth fetcher documentation](https://scrapling.readthedocs.io/en/latest/fetching/stealthy.html), [Trafilatura](https://trafilatura.readthedocs.io/en/latest/).
 
 ## Local model choice
 
@@ -138,11 +138,19 @@ Scheduled tag review and automatic backups default to every 24 hours **while the
 
 ## Backup and restore
 
-The default live database is `data/braindump.sqlite`, with SQLite WAL sidecars. **Use Download backup** for a consistent portable JSON snapshot. It includes full text, all statuses, lists and memberships, tags, accepted aliases, merge-review history, and settings. Running job history is not backed up; interrupted links are requeued on restore. Older version 1 backups are supported but contain no lists, so restoring one replaces current lists with an empty set; the safety snapshot preserves them.
+Restores are exclusive: another restore or an active worker returns a conflict. The worker stays paused throughout body parsing and replacement; failed deletions or inserts roll back the entire transaction. Imported and restored URLs share an 8,192-character normalized limit, including percent encoding, so new saved links can round-trip through backup validation.
 
-Automatic snapshots are stored in `data/backups/`, retaining the latest 14 automatic copies. A restore validates the version and every record before replacing the library in one transaction. It first writes a `before-restore-*.json` safety snapshot. Invalid input or a transaction failure leaves the current library intact. Restore is blocked while a job is actively running. The upload limit is 256 MB. Safety snapshots are not automatically pruned.
+The default live database is `data/braindump.sqlite`, with SQLite WAL sidecars. **Use Download Backup** for a consistent portable JSON snapshot. It includes full text, all statuses, lists and memberships, tags, accepted aliases, merge-review history, and settings. Running job history is not backed up; interrupted links are requeued on restore. Older version 1 backups are supported but contain no lists, so restoring one replaces current lists with an empty set; the safety snapshot preserves them.
 
-Settings & Backups → Backup & Restore lists **Available Backups** from `data/backups/`, newest first, with filenames, last-modified dates and sizes. Use a row's **Download** to save that snapshot elsewhere, or **Restore** to validate it and review its link/list counts before confirming replacement. Refresh reloads the list; it also updates periodically and after restoration. Show more reveals older snapshots. The existing Restore backup button still accepts a file from your computer. No backup is restored merely by listing or selecting it.
+Automatic snapshots are stored in the configured backup folder (initially `data/backups/`), retaining the latest 14 automatic copies. A restore validates the version and every record before replacing the library in one transaction. It first writes a `before-restore-*.json` safety snapshot. Invalid input or a transaction failure leaves the current library intact. Restore is blocked while a job is actively running. The upload limit is 256 MB. Safety snapshots are not automatically pruned.
+
+In Settings & Backups → Backup & Restore, **Create Backup** saves a complete `manual-…json` snapshot in your configured backup folder and immediately refreshes **Available Backups**. It works while background processing runs and does not change the automatic backup schedule. Manual copies are retained until you remove them. **Download Backup** downloads a snapshot to your browser instead.
+
+Settings & Backups → Backup & Restore lists **Available Backups** from your configured backup folder, newest first, with filenames, last-modified dates and sizes. Use a row's **Download** to save that snapshot elsewhere, or **Restore** to validate it and review its link/list counts before confirming replacement. Refresh reloads the list; it also updates periodically and after restoration. Show more reveals older snapshots. The existing Restore Backup button still accepts a file from your computer. No backup is restored merely by listing or selecting it.
+
+Set **Backup Folder** in the same section and choose **Save Backup Folder** to move existing backups and use the new location for manual, automatic and safety snapshots. Enter an absolute path or `~/…`; missing destination folders are created. Regular JSON backups move with their names, contents and modification dates; unrelated files, subfolders and symlinks stay in place. Existing destination files are never overwritten. Choose a separate folder, not a parent or child of the current one. The folder choice survives restarts and library restores and is excluded from portable backups.
+
+Moving copies and flushes all backups before saving the new folder, then removes the originals. Allow enough free space for the copies, including when moving on the same disk. A copy or settings failure leaves the old folder active and preserves all originals. If old files cannot be removed, the app uses the complete new copies and lists the originals that need manual cleanup. An interrupted app or machine can leave duplicate or partial copies in the destination; the originals are kept until the new location is committed. Resolve reported filename conflicts before retrying. Moving many large backups can take a while.
 
 To undo a restore, merge or emptied Trash, select the corresponding safety snapshot in Available Backups. These are unencrypted backups containing full article text. Copy downloaded backups to another disk/location if you want protection against drive failure; automatic copies on the same disk do not provide that.
 
@@ -154,12 +162,18 @@ To undo a restore, merge or emptied Trash, select the corresponding safety snaps
 bun install --frozen-lockfile
 uv sync --locked --project scraper --python 3.13
 bun run verify    # complete automated code, test, documentation and build gate
+bun run test:coverage # run both offline suites and regenerate coverage reports
 bun run test:live # opt-in real extraction + local Ollama + restore/search
+bun run test:browser # opt-in Chromium transport security checks
 ```
 
-`verify` uses the same checks as CI and needs no running app, Ollama or Chromium. It checks formatting, TypeScript/React/accessibility and Python lint, local documentation links and anchors, Mermaid syntax, isolated tests, dependency lockfiles, repository conventions and the production build. See [the engineering standards](docs/standards.md) for enforced rules and required review evidence.
+`verify` uses the same checks as CI and needs no running app, Ollama or Chromium. It checks formatting, TypeScript/React/accessibility and Python lint, local documentation links and anchors, Mermaid syntax, isolated tests, dependency lockfiles and security audit, repository conventions and the production build. See [the engineering standards](docs/standards.md) for enforced rules and required review evidence.
+
+The test gate generates coverage reports in the ignored `coverage/` directory: JavaScript/TypeScript LCOV at `coverage/bun/lcov.info`, and Python HTML at `coverage/python/html/index.html` with machine-readable results at `coverage/python/coverage.json`. Bun measures modules loaded in its test process, so its percentage does not include browser-only components or code exercised in child processes. Python reports statements and branches in the scraper. Coverage identifies gaps; mocked transports do not establish real-site compatibility or complete network security.
 
 The live check uses a temporary database and does not add test links to your library. It requires completed setup and running Ollama.
+
+`bun run test:browser` runs the opt-in Chromium network-boundary regression against disposable local HTTP servers. It requires the browser installed by setup, uses no library data or Ollama, and checks allowed redirects, blocked private redirects/subrequests and deny-only fallback traffic. Run it for scraping transport changes alongside `bun run test:live`.
 
 ## Making changes
 

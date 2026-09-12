@@ -11,6 +11,9 @@
     "build": "tsc --noEmit && vite build",
     "start": "bun server/index.ts",
     "test": "bun test",
+    "test:coverage": "bun run test:coverage:bun && bun run test:coverage:python",
+    "test:coverage:bun": "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
+    "test:coverage:python": "uv run --locked --project scraper coverage run --rcfile=scraper/pyproject.toml -m unittest discover -s scraper/tests -v && uv run --locked --project scraper coverage report --rcfile=scraper/pyproject.toml && uv run --locked --project scraper coverage html --rcfile=scraper/pyproject.toml && uv run --locked --project scraper coverage json --rcfile=scraper/pyproject.toml",
     "test:live": "bun scripts/check-live.ts",
     "import": "bun scripts/import.ts",
     "setup": "bun scripts/setup.ts",
@@ -23,7 +26,9 @@
     "check:python": "uv run --locked --project scraper ruff check scraper",
     "check:locks": "bun install --frozen-lockfile --ignore-scripts && uv lock --project scraper --check",
     "test:python": "uv run --locked --project scraper python -m unittest discover -s scraper/tests -v",
-    "verify": "bun scripts/verify.ts"
+    "verify": "bun scripts/verify.ts",
+    "check:audit": "bun audit",
+    "test:browser": "PLAYWRIGHT_BROWSERS_PATH=.browsers uv run --locked --project scraper python -m scraper.tests.browser_check"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.23",
@@ -33,23 +38,23 @@
     "clsx": "2.1.1",
     "cn": "0.2.6",
     "entities": "8.1.0",
-    "lucide-react": "1.43.0",
+    "lucide-react": "1.45.0",
     "next-themes": "0.4.6",
     "radix-ui": "1.6.7",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "sonner": "2.0.8",
     "tailwind-merge": "3.6.0",
-    "zod": "4.5.4"
+    "zod": "4.6.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
     "@types/bun": "1.4.2",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.7",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
     "github-slugger": "2.0.0",
-    "happy-dom": "20.14.3",
+    "happy-dom": "20.14.5",
     "markdownlint-cli2": "0.23.2",
     "mdast-util-from-markdown": "2.0.3",
     "mermaid": "12.0.0",
@@ -58,7 +63,11 @@
     "prettier": "3.9.6",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.2.2",
-    "yaml": "2.9.0"
+    "vite": "8.3.0",
+    "yaml": "2.9.1"
+  },
+  "overrides": {
+    "lodash-es": "4.18.1",
+    "smol-toml": "1.8.0"
   }
 }

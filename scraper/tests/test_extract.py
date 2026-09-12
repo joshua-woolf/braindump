@@ -206,7 +206,7 @@ class ExtractionTests(unittest.TestCase):
                 "test",
             )
 
-    @patch("scraper.extract.socket.getaddrinfo", return_value=[address("1.1.1.1")])
+    @patch("scraper.transport.socket.getaddrinfo", return_value=[address("1.1.1.1")])
     def test_html_refresh_is_resolved_and_private_destinations_are_guarded(
         self, _lookup
     ):
@@ -216,9 +216,9 @@ class ExtractionTests(unittest.TestCase):
             '<meta http-equiv="refresh" content="0;url=http://127.0.0.1/private">'
         )
         with (
-            patch("scraper.extract.Fetcher.get", return_value=private) as fetcher,
+            patch("scraper.extract.fetch_page", return_value=private) as fetcher,
             patch(
-                "scraper.extract.StealthyFetcher.fetch",
+                "scraper.extract.fetch_browser",
                 side_effect=ValueError("blocked"),
             ),
         ):
@@ -226,12 +226,12 @@ class ExtractionTests(unittest.TestCase):
             def lookup(host, *_args, **_kwargs):
                 return [address("127.0.0.1" if host == "127.0.0.1" else "1.1.1.1")]
 
-            with patch("scraper.extract.socket.getaddrinfo", side_effect=lookup):
+            with patch("scraper.transport.socket.getaddrinfo", side_effect=lookup):
                 with self.assertRaisesRegex(ValueError, "Private and local"):
                     extract.extract("https://example.com/")
             fetcher.assert_called_once()
 
-    @patch("scraper.extract.socket.getaddrinfo", return_value=[address("1.1.1.1")])
+    @patch("scraper.transport.socket.getaddrinfo", return_value=[address("1.1.1.1")])
     def test_public_web_url_is_allowed(self, _lookup):
         self.assertEqual(
             extract.public_url("https://example.com/article"),
@@ -240,7 +240,7 @@ class ExtractionTests(unittest.TestCase):
 
     def test_mixed_public_and_private_dns_is_rejected(self):
         with patch(
-            "scraper.extract.socket.getaddrinfo",
+            "scraper.transport.socket.getaddrinfo",
             return_value=[address("1.1.1.1"), address("127.0.0.1")],
         ):
             with self.assertRaisesRegex(ValueError, "Private and local"):
@@ -249,7 +249,7 @@ class ExtractionTests(unittest.TestCase):
     def test_non_web_urls_credentials_and_nonstandard_ports_are_rejected_before_dns(
         self,
     ):
-        with patch("scraper.extract.socket.getaddrinfo") as lookup:
+        with patch("scraper.transport.socket.getaddrinfo") as lookup:
             for url in [
                 "file:///etc/passwd",
                 "https://user:secret@example.com/",
@@ -305,3 +305,28 @@ class ExtractionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PdfAllocationTests(unittest.TestCase):
+    def test_compressed_pdf_stream_is_rejected_by_decoder_before_page_allocation(self):
+        from pypdf import PdfReader
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        stream = DecodedStreamObject()
+        stream.set_data(b"x" * 100_000)
+        page[NameObject("/Contents")] = stream.flate_encode()
+        output = BytesIO()
+        writer.write(output)
+        pdf = output.getvalue()
+        self.assertLess(len(pdf), 4096)
+        # The decoder used to allocate all 100 KB, then the caller checked length.
+        with patch("scraper.extract.MAX_HTML", 4096):
+            with self.assertRaisesRegex(
+                extract.UnsupportedContent, "Limit reached while decompressing"
+            ):
+                extract.pdf_article(response(pdf, "application/pdf"))
+        # Limits are scoped to extraction and cannot leak into another caller.
+        self.assertEqual(
+            len(PdfReader(BytesIO(pdf)).pages[0].get_contents().get_data()), 100_000
+        )

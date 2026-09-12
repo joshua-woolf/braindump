@@ -1,0 +1,3 @@
+[test]
+# Helpers and fixtures are test infrastructure, not application coverage.
+coveragePathIgnorePatterns = ["tests/**"]

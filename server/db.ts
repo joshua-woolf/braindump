@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import {
   backupSchema,
@@ -13,6 +13,8 @@ import {
 } from "./schema";
 import { normalizeUrl } from "./urls";
 import { config } from "./config";
+import { backupDirectory, listBackups } from "./backup-files";
+import { moveBackupDirectory } from "./backup-directory";
 import type { JobKind, QueueJob } from "./queue-types";
 
 export class QueueError extends Error {
@@ -562,15 +564,25 @@ export class Store {
         .all() as ListMembership[],
     };
   }
+  backupDirectory(): string {
+    return this.getMeta("backupDirectory", resolve(this.dir, "backups"));
+  }
+  moveBackups(input: unknown) {
+    return moveBackupDirectory(this.backupDirectory(), input, (directory) => {
+      this.setMeta("backupDirectory", directory);
+    });
+  }
   backup(prefix = "auto") {
-    const dir = join(this.dir, "backups");
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const dir = this.backupDirectory();
+    backupDirectory(dir, true);
     const name = `${prefix}-${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 6)}.json`;
     writeFileSync(join(dir, name), JSON.stringify(this.export()), {
       mode: 0o600,
+      flag: "wx",
     });
     if (prefix === "auto")
-      for (const old of readdirSync(dir)
+      for (const old of listBackups(dir)
+        .map((backup) => backup.name)
         .filter((n) => n.startsWith("auto-"))
         .sort()
         .slice(0, -14))
@@ -600,11 +612,25 @@ export class Store {
       }
     }
     const safetyBackup = this.backup("before-restore");
+    const localBackupDirectory = this.backupDirectory();
     this.db.transaction(() => {
-      this.db.exec(
-        "DELETE FROM jobs; DELETE FROM list_links; DELETE FROM lists; DELETE FROM link_tags; DELETE FROM links; DELETE FROM search; DELETE FROM tags; DELETE FROM aliases; DELETE FROM suggestions; DELETE FROM meta;",
-      );
+      // Bun can swallow an intermediate failure in a multi-statement exec.
+      // Execute each deletion separately so the transaction always rolls back.
+      for (const table of [
+        "jobs",
+        "list_links",
+        "lists",
+        "link_tags",
+        "links",
+        "search",
+        "tags",
+        "aliases",
+        "suggestions",
+        "meta",
+      ])
+        this.db.run(`DELETE FROM ${table}`);
       this.setMeta("settings", snapshot.settings);
+      this.setMeta("backupDirectory", localBackupDirectory);
       for (const a of snapshot.aliases)
         this.db.run("INSERT INTO aliases VALUES (?,?)", [a.source, a.target]);
       for (const l of snapshot.links) {

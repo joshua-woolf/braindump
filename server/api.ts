@@ -8,8 +8,9 @@ import {
   tagName,
   listInputSchema,
   emptyTrashSchema,
+  createBackupSchema,
 } from "./schema";
-import { parseUrls, normalizeUrl } from "./urls";
+import { MAX_URL_LENGTH, parseUrls, normalizeUrl } from "./urls";
 import { FaviconCache } from "./favicon";
 import { BackupFileError, listBackups, readBackup } from "./backup-files";
 
@@ -26,6 +27,7 @@ export function createApi(
   worker: Worker,
   favicons = new FaviconCache(),
 ) {
+  let restoring = false;
   return async (request: Request) => {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -204,7 +206,7 @@ export function createApi(
             action === "repair-url"
               ? normalizeUrl(
                   z
-                    .object({ url: z.string().url().max(8192) })
+                    .object({ url: z.string().url().max(MAX_URL_LENGTH) })
                     .strict()
                     .parse(await request.json()).url,
                 )
@@ -220,11 +222,6 @@ export function createApi(
               : null;
           // Read again after body parsing: another request may have queued or trashed this link.
           const current = store.get(id)!;
-          if (replacement && replacement.length > 8192)
-            return json(
-              { error: "The normalized URL exceeds 8192 characters." },
-              400,
-            );
           if (current.deleted)
             return json(
               { error: "Restore this link from Trash before processing it." },
@@ -314,8 +311,20 @@ export function createApi(
         store.setMeta("settings", settings);
         return json(settings);
       }
+      if (path === "/api/settings/backup-directory" && method === "GET")
+        return json({ directory: store.backupDirectory() });
+      if (path === "/api/settings/backup-directory" && method === "PUT")
+        return json(store.moveBackups(await request.json()));
       if (path === "/api/backups" && method === "GET")
-        return json({ backups: listBackups(store.dir) });
+        return json({ backups: listBackups(store.backupDirectory()) });
+      if (path === "/api/backups" && method === "POST") {
+        createBackupSchema.parse(await request.json());
+        return json({ backup: store.backup("manual") }, 201);
+      }
+      if (path === "/api/backups/before-import" && method === "POST") {
+        createBackupSchema.parse(await request.json());
+        return json({ backup: store.backup("before-import") }, 201);
+      }
       const savedBackup = path.match(/^\/api\/backups\/([^/]+)$/);
       if (savedBackup && method === "GET") {
         const name = decodeURIComponent(savedBackup[1]);
@@ -324,7 +333,7 @@ export function createApi(
           (character) =>
             `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
         );
-        return new Response(readBackup(store.dir, name), {
+        return new Response(readBackup(store.backupDirectory(), name), {
           headers: {
             "Content-Type": "application/json",
             "Content-Disposition": `attachment; filename="backup.json"; filename*=UTF-8''${encodedName}`,
@@ -342,19 +351,22 @@ export function createApi(
           },
         });
       if (path === "/api/restore" && method === "POST") {
-        if (worker.busy)
+        if (worker.busy || restoring)
           return json(
             {
               error:
-                "A background job is running. Wait for it to finish before restoring.",
+                "A background job or restore is running. Wait for it to finish before restoring.",
             },
             409,
           );
+        restoring = true;
+        const wasPaused = worker.paused;
         worker.paused = true;
         try {
           return json(store.restore(await request.json()));
         } finally {
-          worker.paused = false;
+          worker.paused = wasPaused;
+          restoring = false;
         }
       }
       return json({ error: "Not found." }, 404);

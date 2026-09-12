@@ -146,14 +146,20 @@ test("missing files traversal symlinks and non-files never expose other data", a
   expect((await api(request("/backups/missing.json"))).status).toBe(404);
   rmSync(join(dir, "backups"), { recursive: true });
   symlinkSync(dir, join(dir, "backups"));
-  expect(() => listBackups(dir)).toThrow("regular directory");
-  expect(() => readBackup(dir, "private.json")).toThrow("regular directory");
+  expect(() => listBackups(store.backupDirectory())).toThrow(
+    "regular directory",
+  );
+  expect(() => readBackup(store.backupDirectory(), "private.json")).toThrow(
+    "regular directory",
+  );
 });
 
 test("oversized files are listed but rejected before reading into memory", async () => {
   const path = saved("oversized.json");
   truncateSync(path, MAX_BACKUP_BYTES + 1);
-  expect(listBackups(dir)[0].size).toBe(MAX_BACKUP_BYTES + 1);
+  expect(listBackups(store.backupDirectory())[0].size).toBe(
+    MAX_BACKUP_BYTES + 1,
+  );
   const api = createApi(store, new Worker(store));
   expect((await api(request("/backups/oversized.json"))).status).toBe(413);
 });
@@ -189,5 +195,198 @@ test("saved backup endpoints preserve local origin and method boundaries", async
     ).toBe(403);
     expect((await api(request(path, "DELETE", {}))).status).toBe(404);
   }
-  expect(listBackups(dir)).toHaveLength(1);
+  expect(listBackups(store.backupDirectory())).toHaveLength(1);
+});
+
+test("restore rolls back every table and index when a deletion fails midway", () => {
+  const empty = store.export();
+  const { id } = store.add("https://example.com/original");
+  store.update(id, { title: "Original", tags: ["original"] });
+  const list = store.createList("Original List");
+  store.setMembership(list.id, id, true);
+  store.setMeta(`analysis:${id}`, { completed: ["checkpoint"] });
+  store.db.run("INSERT INTO aliases VALUES ('old', 'original')");
+  store.db.run("INSERT INTO suggestions VALUES (?,?,?,?,?)", [
+    crypto.randomUUID(),
+    "old",
+    "original",
+    "Similar",
+    "pending",
+  ]);
+  const tables = [
+    "jobs",
+    "list_links",
+    "lists",
+    "link_tags",
+    "links",
+    "search",
+    "tags",
+    "aliases",
+    "suggestions",
+    "meta",
+  ];
+  const state = () =>
+    tables.map((table) => store.db.query(`SELECT * FROM ${table}`).all());
+  const before = state();
+  store.db.run(
+    "CREATE TRIGGER reject_delete BEFORE DELETE ON links BEGIN SELECT RAISE(ABORT,'blocked deletion'); END;",
+  );
+  expect(() => store.restore(empty)).toThrow("blocked deletion");
+  expect(state()).toEqual(before);
+  expect(store.list(new URLSearchParams({ q: "original" })).total).toBe(1);
+  const backup = listBackups(store.backupDirectory())[0];
+  expect(backup.name).toStartWith("before-restore-");
+  expect(
+    backupSchema.parse(
+      JSON.parse(readBackup(store.backupDirectory(), backup.name).toString()),
+    ).links[0].id,
+  ).toBe(id);
+});
+
+test("a pending restore exclusively pauses dispatch and rejects overlapping restores", async () => {
+  const { id } = store.add("https://example.com/original");
+  const snapshot = store.export();
+  snapshot.links[0].summary = "Restored summary";
+  const worker = new Worker(store);
+  const api = createApi(store, worker);
+  let finish!: () => void;
+  const slow = new Request("http://127.0.0.1:3210/api/restore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: new ReadableStream({
+      start(controller) {
+        finish = () => {
+          controller.enqueue(
+            new TextEncoder().encode(JSON.stringify(snapshot)),
+          );
+          controller.close();
+        };
+      },
+    }),
+  });
+  const pending = api(slow);
+  expect(worker.paused).toBe(true);
+  expect((await api(request("/restore", "POST", snapshot))).status).toBe(409);
+  expect(worker.paused).toBe(true);
+  await worker.tick();
+  expect(worker.busy).toBe(false);
+  expect(store.get(id)?.state).toBe("queued");
+  finish();
+  expect((await pending).status).toBe(200);
+  expect(worker.paused).toBe(false);
+  expect(store.get(id)?.summary).toBe("Restored summary");
+});
+
+test("restore releases its lock after invalid input and retains an existing pause", async () => {
+  const worker = new Worker(store);
+  const api = createApi(store, worker);
+  worker.paused = true;
+  expect((await api(request("/restore", "POST", {}))).status).toBe(400);
+  expect(worker.paused).toBe(true);
+  expect((await api(request("/restore", "POST", store.export()))).status).toBe(
+    200,
+  );
+  expect(worker.paused).toBe(true);
+});
+
+test("manual backup creation saves a complete downloadable snapshot without changing jobs or automatic scheduling", async () => {
+  const { id } = store.add("https://example.com/manual");
+  store.update(id, {
+    title: "original TITLE",
+    content: "Saved article text",
+    summary: "Saved summary",
+    tags: ["research"],
+    read: true,
+    liked: true,
+    archived: true,
+    deleted: true,
+  });
+  const list = store.createList("Reading List");
+  store.setMembership(list.id, id, true);
+  store.setMeta("lastBackup", 123);
+  const before = backupSchema.parse(store.export());
+  const jobs = store.jobs();
+  const worker = new Worker(store);
+  worker.busy = true;
+  const api = createApi(store, worker);
+  const response = await api(request("/backups", "POST", {}));
+  expect(response.status).toBe(201);
+  const { backup } = await response.json();
+  expect(backup).toMatch(/^manual-.*\.json$/);
+  const inventory = await (await api(request("/backups"))).json();
+  expect(inventory.backups[0].name).toBe(backup);
+  const download = await api(request(`/backups/${backup}`));
+  const snapshot = backupSchema.parse(await download.json());
+  expect(snapshot).toEqual({ ...before, exportedAt: snapshot.exportedAt });
+  expect(store.jobs()).toEqual(jobs);
+  expect(store.getMeta("lastBackup", 0)).toBe(123);
+  expect(worker.busy).toBe(true);
+  expect(worker.paused).toBe(false);
+  store.add("https://example.com/after-backup");
+  expect(store.restore(snapshot).restored).toBe(1);
+  expect(store.get(id)).toMatchObject({
+    title: "original TITLE",
+    liked: true,
+    deleted: true,
+  });
+  expect(store.linkLists(id)).toEqual([list.id]);
+});
+
+test("manual backups have unique filenames and survive automatic retention", async () => {
+  const api = createApi(store, new Worker(store));
+  const first = await (await api(request("/backups", "POST", {}))).json();
+  const second = await (await api(request("/backups", "POST", {}))).json();
+  expect(first.backup).not.toBe(second.backup);
+  for (let i = 0; i < 15; i++) store.backup();
+  const names = listBackups(store.backupDirectory()).map((item) => item.name);
+  expect(names).toContain(first.backup);
+  expect(names).toContain(second.backup);
+  expect(names.filter((name) => name.startsWith("auto-"))).toHaveLength(14);
+});
+
+test("manual backup creation rejects foreign origins and caller-controlled filenames and reports disk failures", async () => {
+  store.add("https://example.com/preserved");
+  const before = store.all();
+  const api = createApi(store, new Worker(store));
+  expect(
+    (
+      await api(
+        new Request("http://127.0.0.1:3210/api/backups", {
+          method: "POST",
+          headers: {
+            Origin: "https://foreign.example",
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        }),
+      )
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await api(
+        request("/backups", "POST", {
+          prefix: "../../outside",
+          name: "chosen.json",
+        }),
+      )
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await api(
+        new Request("http://127.0.0.1:3210/api/backups", {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: "{}",
+        }),
+      )
+    ).status,
+  ).toBe(415);
+  expect(listBackups(store.backupDirectory())).toEqual([]);
+  writeFileSync(join(dir, "backups"), "A file blocks the backup directory.");
+  const failed = await api(request("/backups", "POST", {}));
+  expect(failed.status).toBe(400);
+  expect((await failed.json()).error).toBeString();
+  expect(store.all()).toEqual(before);
 });
