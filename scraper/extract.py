@@ -2,8 +2,12 @@
 
 import json
 import logging
+import os
 import re
+import signal
 import sys
+import threading
+import time
 from io import BytesIO
 from urllib.parse import urljoin, urlparse
 
@@ -332,7 +336,20 @@ def extract(url, force_browser=False):
         ) from error
 
 
-if __name__ == "__main__":
+def main():
+    # Parent death also cleans up the browser when the app is force-quit.
+    parent = os.getppid()
+
+    def terminate(_signal, _frame):
+        raise KeyboardInterrupt
+
+    def watch_parent():
+        while os.getppid() == parent:
+            time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    signal.signal(signal.SIGTERM, terminate)
+    threading.Thread(target=watch_parent, daemon=True).start()
     try:
         print(
             json.dumps(
@@ -342,3 +359,7 @@ if __name__ == "__main__":
     except Exception as error:
         print(json.dumps({"error": str(error)}))
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

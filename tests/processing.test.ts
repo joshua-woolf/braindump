@@ -64,6 +64,56 @@ function request(id: string, action: string, body: unknown) {
   });
 }
 
+test("shutdown preserves saved text, flags, memberships and checkpoints without spending a retry", async () => {
+  const { id } = store.add("https://example.com/shutdown");
+  store.update(id, { content: text, state: "queued", read: true, liked: true });
+  store.db.run("UPDATE jobs SET kind='analyze',attempts=1,priority=7");
+  const list = store.createList("Keep this list");
+  store.setMembership(list.id, id, true);
+  store.setMeta(`analysis:${id}`, { saved: "checkpoint" });
+  let entered!: () => void;
+  let finish!: (value: typeof result) => void;
+  const running = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const worker = new Worker(store, {
+    ...services(),
+    analyze: async () => {
+      entered();
+      return await new Promise<typeof result>((resolve) => {
+        finish = resolve;
+      });
+    },
+  });
+  const tick = worker.tick();
+  await running;
+  const shutdown = worker.shutdown();
+  finish(result);
+  await Promise.all([tick, shutdown]);
+  expect(store.get(id)).toMatchObject({
+    content: text,
+    read: true,
+    liked: true,
+    state: "queued",
+    summary: "",
+  });
+  expect(
+    store.db.query("SELECT kind,state,attempts,priority FROM jobs").get(),
+  ).toEqual({ kind: "analyze", state: "queued", attempts: 1, priority: 7 });
+  expect(
+    store.db
+      .query("SELECT link_id FROM list_links WHERE list_id=?")
+      .get(list.id),
+  ).toEqual({ link_id: id });
+  expect(store.getMeta<unknown>(`analysis:${id}`, null)).toEqual({
+    saved: "checkpoint",
+  });
+  await worker.tick();
+  expect(store.db.query("SELECT attempts FROM jobs").get()).toEqual({
+    attempts: 1,
+  });
+});
+
 test("URL repair backs up old content, preserves identity and memberships, and queues extraction", async () => {
   const { id } = store.add("https://example.com/typo");
   store.db.run("UPDATE jobs SET state='failed'");

@@ -1,0 +1,22 @@
+html {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+body {
+  margin: 0;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  background: #10172b;
+  color: #f5f3ff;
+}
+main {
+  max-width: 38rem;
+  padding: 3rem;
+}
+h1 {
+  color: #c4b5fd;
+}
+p {
+  line-height: 1.6;
+}

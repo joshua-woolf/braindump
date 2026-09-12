@@ -19,7 +19,7 @@
     "setup": "bun scripts/setup.ts",
     "format": "prettier --write . --ignore-unknown && uv run --locked --project scraper ruff format scraper",
     "format:check": "prettier --check . --ignore-unknown && uv run --locked --project scraper ruff format --check scraper",
-    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives src server scripts tests public vite.config.ts",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives src server scripts tests public desktop vite.config.ts",
     "lint:docs": "markdownlint-cli2",
     "check:repo": "bun scripts/check-repo.ts",
     "check:docs": "bun scripts/check-docs.ts",
@@ -28,7 +28,10 @@
     "test:python": "uv run --locked --project scraper python -m unittest discover -s scraper/tests -v",
     "verify": "bun scripts/verify.ts",
     "check:audit": "bun audit",
-    "test:browser": "PLAYWRIGHT_BROWSERS_PATH=.browsers uv run --locked --project scraper python -m scraper.tests.browser_check"
+    "test:browser": "PLAYWRIGHT_BROWSERS_PATH=.browsers uv run --locked --project scraper python -m scraper.tests.browser_check",
+    "build:desktop": "bun scripts/build-desktop.ts",
+    "test:desktop": "bun scripts/check-desktop.ts",
+    "test:desktop:live": "bun scripts/check-desktop.ts --live"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.23",
@@ -49,6 +52,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
+    "@tauri-apps/cli": "2.11.4",
     "@types/bun": "1.4.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

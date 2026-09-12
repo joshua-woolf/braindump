@@ -92,9 +92,10 @@ test("changing the folder moves every visible backup with exact bytes and dates 
   expect(await (await api(request(`/backups/${names[0]}`))).bytes()).toEqual(
     new Uint8Array(bytes[0]),
   );
-  expect(store.export()).toEqual({
+  const afterMove = store.export();
+  expect(afterMove).toEqual({
     ...snapshot,
-    exportedAt: store.export().exportedAt,
+    exportedAt: afterMove.exportedAt,
   });
   expect(store.jobs()).toEqual(jobs);
   expect(store.getMeta("lastBackup", 0)).toBe(123);

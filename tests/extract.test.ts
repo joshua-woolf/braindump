@@ -13,10 +13,10 @@ import { join } from "node:path";
 
 const realFile = Bun.file;
 const realSpawn = Bun.spawn;
-const realSetTimeout = setTimeout;
+const realDeadline = AbortSignal.timeout.bind(AbortSignal);
 let fileMock: Mock<typeof Bun.file>;
 let spawnMock: Mock<typeof Bun.spawn>;
-let timeoutMock: Mock<typeof setTimeout>;
+let timeoutMock: Mock<typeof AbortSignal.timeout>;
 let clearMock: Mock<typeof clearTimeout>;
 const article = {
   title: "original PAGE title",
@@ -32,7 +32,7 @@ beforeEach(() => {
   spawnMock = spyOn(Bun, "spawn").mockImplementation(() => {
     throw new Error("Unexpected subprocess in extraction test");
   });
-  timeoutMock = spyOn(globalThis, "setTimeout");
+  timeoutMock = spyOn(AbortSignal, "timeout");
   clearMock = spyOn(globalThis, "clearTimeout");
 });
 afterEach(() => {
@@ -53,6 +53,7 @@ function childOutput(output: string, code = 0) {
       ],
       {
         stdin: new Blob([output]),
+        detached: true,
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -75,7 +76,7 @@ test("extraction reads the final JSON line and launches an isolated browser envi
       env: { PLAYWRIGHT_BROWSERS_PATH: expect.stringContaining("/.browsers") },
     },
   ]);
-  expect(timeoutMock.mock.calls[0][1]).toBe(150_000);
+  expect(timeoutMock.mock.calls[0][0]).toBe(150_000);
   expect(clearMock).toHaveBeenCalledTimes(1);
 });
 
@@ -108,7 +109,9 @@ test("reported extraction errors are preserved even when the process exits succe
 test("nonzero exit cannot turn otherwise valid output into a saved article", async () => {
   childOutput(JSON.stringify(article), 1);
   expect(await rejection(extract("https://example.com/"))).toMatchObject({
-    message: expect.stringContaining("Retry or paste the content"),
+    message: expect.stringContaining(
+      "Extractor exited (1). scraper diagnostic",
+    ),
   });
 });
 
@@ -130,12 +133,12 @@ test("empty, short and oversized extraction results fail validation", async () =
 test("a stalled subprocess is terminated and reports a retryable extraction error", async () => {
   spawnMock.mockImplementation(() =>
     realSpawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
       stdout: "pipe",
       stderr: "pipe",
     }),
   );
-  timeoutMock.mockImplementation(((callback: () => void) =>
-    realSetTimeout(callback, 20)) as typeof setTimeout);
+  timeoutMock.mockImplementation(() => realDeadline(20));
   expect(await rejection(extract("https://example.com/"))).toMatchObject({
     message: expect.stringContaining("timed out"),
   });

@@ -64,9 +64,33 @@ bun run build
 bun start
 ```
 
-Open [Braindump locally](http://127.0.0.1:3210). Keep this terminal running; Ctrl-C stops the app. Only one app server should use a given data directory at a time. Both modes bind to loopback, not your LAN.
+Open [Braindump locally](http://127.0.0.1:3210). Keep this terminal running; Ctrl-C stops the app. An operating-system lock permits only one app server per data directory, even on different ports. Stop older versions that predate this lock before sharing a library. Both modes bind to loopback, not your LAN.
 
 Optional configuration lives in `.env` (copy `.env.example`). Bun reads it automatically. Settings chosen in the app are persisted in SQLite and take precedence over the initial model and schedule defaults in the environment. `DATA_DIR`, `PORT`, `OLLAMA_URL`, and `OLLAMA_CONTEXT` remain environment configuration. The Vite development proxy expects API port 3210; change `vite.config.ts` if changing that port for development.
+
+## macOS desktop packaging proof
+
+An Apple Silicon Tauri wrapper can package the existing UI, compiled Bun server, Python extractor and pinned Chromium into `Braindump.app`. Ollama and its models remain separate. This is a local packaging proof; the current build is ad-hoc signed and is not a notarized public release.
+
+Build on an Apple Silicon Mac with Rust/Cargo, Xcode Command Line Tools, Bun and uv installed:
+
+```sh
+bun install --frozen-lockfile
+bun run build:desktop
+```
+
+The app is written to `.desktop-build/target/aarch64-apple-darwin/release/bundle/macos/Braindump.app`; the DMG is written to `.desktop-build/output/`. Use `bun run build:desktop --app-only` when disk-image creation is unavailable. Build outputs and caches are ignored. The deployment floor is macOS 15, matching the highest minimum declared by the bundled native libraries. Installation on macOS 15 and on a separate clean Mac still needs verification.
+
+Opening the app starts its own backend. Closing the window keeps it running; use the menu-bar icon to reopen it, or **Quit Braindump** to stop processing. A second app launch focuses the existing window. The library lives in `~/Library/Application Support/Braindump/`, independently of the app bundle and this checkout. Logs live in `~/Library/Logs/Braindump/`; caches use `~/Library/Caches/Braindump/`. The desktop server uses port 3210 by default and requires the app's private session cookie. Quit a terminal server using that port before opening the desktop app. The browser development workflow remains available separately.
+
+To bring an existing library into the app, download a JSON backup from the running source version, quit that server, and use the desktop app's existing restore workflow in Settings & Backups. Review its replacement confirmation. The original repository library is untouched. JSON restore preserves links, text, statuses and lists but does not migrate job history, priorities or analysis checkpoints. Choose the backup folder separately because it is installation metadata. Never copy a live SQLite main file on its own.
+
+```sh
+bun run test:desktop
+bun run test:desktop:live
+```
+
+Both checks copy the built app into a temporary installation path and use temporary library/log/cache folders and a minimal runtime PATH. The first checks signatures, SQLite/FTS, authenticated startup, backup/restore and parent-death shutdown. The opt-in live check also verifies HTML, text-layer PDF and forced Chromium extraction, then waits for a real Ollama summary. It uses network/model resources. Neither check replaces native window inspection or testing on a clean Mac. See [desktop packaging](docs/desktop.md) for runtime contracts and remaining release work.
 
 ## Using the library
 

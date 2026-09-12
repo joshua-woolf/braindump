@@ -46,21 +46,21 @@ flowchart TB
 
 Links are saved and queued before extraction or inference begins. The worker persists results and failures through the store; the UI polls the API to display progress and links needing attention. Reanalysis uses saved text without fetching the page again. Article text, inference and library storage stay local; extraction requests go to the saved websites.
 
-| Area                      | Entry points and responsibilities                                                                                                                              |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Startup and configuration | `server/index.ts` binds the port before initializing storage; `server/config.ts` resolves environment defaults                                                 |
-| HTTP API                  | `server/api.ts` validates request boundaries, dispatches CRUD/filter/queue/tag/settings/backup operations                                                      |
-| Stored/API contracts      | `server/schema.ts` owns Zod schemas and inferred types; `server/queue-types.ts` defines queue response types; `src/types.ts` adds frontend response types      |
-| Persistence               | `server/db.ts` owns SQLite schema, transactions, FTS, queue persistence, aliases, snapshots and restore                                                        |
-| Jobs and schedules        | `server/worker.ts` runs extraction/analysis/tag-review jobs and due automatic backups                                                                          |
-| Inference                 | `server/ollama.ts` checks local connectivity, requests structured JSON, validates output, and summarizes long articles in sections                             |
-| Extraction boundary       | `server/extract.ts` launches and bounds the Python process; `scraper/transport.py` pins/bounds networking; `scraper/extract.py` handles extraction             |
-| Main UI                   | `src/App.tsx` owns navigation, filters, pagination, polling and modal selection                                                                                |
-| Workflows                 | `src/components/{AddLinks,LinkCard,Reader,ListsPage,ListMembershipEditor,TagsPage,SettingsPage,QueuePage}.tsx` compose shadcn primitives                       |
-| UI foundation             | `src/components/ui/`, `src/index.css`, `src/lib/api.ts`, `src/lib/utils.ts`                                                                                    |
-| Branding/static files     | `index.html` declares metadata and the favicon; Vite copies `public/` assets to `dist/`                                                                        |
-| Setup and operations      | `scripts/setup.ts`, `scripts/dev.ts`, `scripts/import.ts`                                                                                                      |
-| Verification              | `tests/store.test.ts` and `tests/queue.test.ts` use isolated temporary stores; `scripts/check-live.ts` exercises real extraction/inference with temporary data |
+| Area                      | Entry points and responsibilities                                                                                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup and configuration | `server/index.ts` acquires the library lock and binds the port before initializing storage; `server/config.ts` and `server/runtime-paths.ts` resolve runtime paths and defaults |
+| HTTP API                  | `server/api.ts` validates request boundaries, dispatches CRUD/filter/queue/tag/settings/backup operations                                                                       |
+| Stored/API contracts      | `server/schema.ts` owns Zod schemas and inferred types; `server/queue-types.ts` defines queue response types; `src/types.ts` adds frontend response types                       |
+| Persistence               | `server/db.ts` owns SQLite schema, transactions, FTS, queue persistence, aliases, snapshots and restore                                                                         |
+| Jobs and schedules        | `server/worker.ts` runs extraction/analysis/tag-review jobs and due automatic backups                                                                                           |
+| Inference                 | `server/ollama.ts` checks local connectivity, requests structured JSON, validates output, and summarizes long articles in sections                                              |
+| Extraction boundary       | `server/extract.ts` launches and bounds the Python process; `scraper/transport.py` pins/bounds networking; `scraper/extract.py` handles extraction                              |
+| Main UI                   | `src/App.tsx` owns navigation, filters, pagination, polling and modal selection                                                                                                 |
+| Workflows                 | `src/components/{AddLinks,LinkCard,Reader,ListsPage,ListMembershipEditor,TagsPage,SettingsPage,QueuePage}.tsx` compose shadcn primitives                                        |
+| UI foundation             | `src/components/ui/`, `src/index.css`, `src/lib/api.ts`, `src/lib/utils.ts`                                                                                                     |
+| Branding/static files     | `index.html` declares metadata and the favicon; Vite copies `public/` assets to `dist/`                                                                                         |
+| Setup and operations      | `scripts/setup.ts`, `scripts/dev.ts`, `scripts/import.ts`                                                                                                                       |
+| Verification              | `tests/store.test.ts` and `tests/queue.test.ts` use isolated temporary stores; `scripts/check-live.ts` exercises real extraction/inference with temporary data                  |
 
 ## Data and invariants
 
@@ -195,3 +195,15 @@ Automatic backups retain 14 rotating copies. Manual backups are not automaticall
 The importer accepts user-provided newline-separated URL files. It validates the whole file, deduplicates normalized URLs, makes a safety snapshot, and submits batches to the API. It uses the same `PORT` and local `DATA_DIR` configuration as the server for its destination and backup location. Treat import files as user data and use separate temporary fixtures for tests.
 
 Automated tests use temporary directories and do not require the live library. The opt-in live script also uses temporary data, but still consumes real Ollama resources and makes external page requests. A browser-rendered page, a successful HTTP fetch, validated AI output, a queued job, and a working UI are separate kinds of evidence; report which were actually checked.
+
+## Desktop runtime
+
+The [desktop packaging proof](desktop.md) wraps the same HTTP API, SQLite store and worker in a Tauri macOS application. `src-tauri/src/main.rs` owns the window, single-instance behavior, menu-bar actions, backend process, readiness timeout and local logs. `scripts/build-desktop.ts` compiles the Bun entrypoint, freezes the locked Python dependencies with PyInstaller, bundles the matching Chromium runtime and signs nested code before the outer app.
+
+`server/runtime-paths.ts` separates immutable resources from writable library/log/cache directories. Source launches default to this checkout's `data/`; desktop launches default to `~/Library/Application Support/Braindump/`. Explicit `DATA_DIR` overrides both. Backups still use the existing per-installation configured directory and restore semantics.
+
+Every server launch acquires `server/library-lock.ts` before constructing `Store`. The lock uses `flock` through Bun's system-library FFI and a persistent no-follow marker. The operating system releases it on process death; the marker is never deleted, avoiding inode replacement races. The HTTP port is also bound before opening SQLite. This protects new terminal and desktop launches across differing ports; legacy versions must be stopped before sharing their library.
+
+The desktop proof serves the UI from its loopback backend, with no native IPC capabilities granted to that page. `server/desktop-session.ts` requires a random per-launch session cookie for assets, API reads, mutations and downloads; a private bootstrap navigation installs an HttpOnly, SameSite cookie and redirects to the library. Foreign origins remain rejected. The default stable port keeps the webview's appearance/layout storage on the same origin between launches. A separate Tauri-origin transport and richer native file interactions remain future work.
+
+On Quit or parent-pipe EOF, shutdown stops dispatch, cancels this process's outstanding model/extraction operations, waits for the worker and HTTP requests, closes SQLite, then releases the lock. Interrupted work returns to Queue without consuming an attempt, preserving saved text, checkpoints, flags and lists. Extraction runs in its own process group; timeouts and cancellation terminate/reap that group. The Python bridge also watches its parent and unwinds browser contexts when it disappears. No shutdown path stops Ollama or unloads a model used by another app.

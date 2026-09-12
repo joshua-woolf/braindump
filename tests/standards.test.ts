@@ -15,6 +15,7 @@ import {
   manifestIssues,
   workflowIssues,
 } from "../scripts/check-repo";
+import { repositoryFiles } from "../scripts/checks/files";
 
 const repo = resolve(import.meta.dir, "..");
 let dir: string;
@@ -68,6 +69,22 @@ async function lintFixture(source: string, file = "example.ts") {
 }
 
 describe("repository standards reject violations", () => {
+  test("desktop source is checked while only owned generated directories are excluded", () => {
+    for (const path of [
+      "src-tauri/src/main.rs",
+      "src/target/keep.ts",
+      "src-tauri/resources/generated.ts",
+      "src-tauri/gen/generated.ts",
+      "src-tauri/target/generated.ts",
+      ".desktop-build/generated.ts",
+    ]) {
+      mkdirSync(join(dir, dirname(path)), { recursive: true });
+      writeFileSync(join(dir, path), "// fixture\n");
+    }
+    expect(
+      repositoryFiles(dir).filter((path) => /\.(ts|rs)$/.test(path)),
+    ).toEqual(["src-tauri/src/main.rs", "src/target/keep.ts"]);
+  });
   test("file rules reject ambiguous names, conflict markers and invalid whitespace", () => {
     expect(
       fileStandardIssues(

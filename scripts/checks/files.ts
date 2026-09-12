@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 const ignored = new Set([
   ".git",
+  ".desktop-build",
   "node_modules",
   "data",
   "dist",
@@ -24,12 +25,18 @@ const textFiles = new Set([
 export function repositoryFiles(root: string, directory = ""): string[] {
   return readdirSync(join(root, directory), { withFileTypes: true })
     .flatMap((entry) => {
-      if (ignored.has(entry.name) || entry.isSymbolicLink()) return [];
+      if (
+        ignored.has(entry.name) ||
+        entry.isSymbolicLink() ||
+        (directory === "src-tauri" &&
+          ["resources", "gen", "target"].includes(entry.name))
+      )
+        return [];
       const path = directory ? `${directory}/${entry.name}` : entry.name;
       if (entry.isDirectory()) return repositoryFiles(root, path);
       return entry.isFile() &&
         (textFiles.has(entry.name) ||
-          /\.(?:[cm]?[jt]sx?|jsonc?|css|html|md|ya?ml|toml|py|svg)$/.test(
+          /\.(?:[cm]?[jt]sx?|jsonc?|css|html|md|ya?ml|toml|py|svg|rs|plist)$/.test(
             entry.name,
           ))
         ? [path]

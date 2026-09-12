@@ -7,6 +7,7 @@ import type { CurrentJob } from "./queue-types";
 export class Worker {
   busy = false;
   paused = false;
+  private stopping = false;
   current: CurrentJob | null = null;
   timer?: ReturnType<typeof setInterval>;
   constructor(
@@ -20,6 +21,14 @@ export class Worker {
   stop() {
     clearInterval(this.timer);
     this.paused = true;
+  }
+  async shutdown() {
+    this.stopping = true;
+    this.stop();
+    while (this.busy) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  private ensureRunning() {
+    if (this.stopping) throw new Error("Braindump is shutting down.");
   }
   schedule() {
     const settings = this.store.settings();
@@ -73,6 +82,7 @@ export class Worker {
         if (job.kind === "process") {
           this.store.update(link.id, { state: "extracting", error: null });
           const article = await this.services.extract(link.url);
+          this.ensureRunning();
           // Always re-read before writing; read/like/archive edits can happen during extraction.
           const jobId = job.id;
           const linkId = link.id;
@@ -109,6 +119,7 @@ export class Worker {
             },
           },
         );
+        this.ensureRunning();
         this.store.update(link.id, {
           ...result,
           state: "ready",
@@ -125,6 +136,20 @@ export class Worker {
         "DELETE FROM jobs WHERE state='done' AND id < (SELECT COALESCE(MAX(id),0)-500 FROM jobs)",
       );
     } catch (error) {
+      if (this.stopping) {
+        if (job) {
+          const interrupted = job;
+          this.store.db.transaction(() => {
+            this.store.db.run(
+              "UPDATE jobs SET state='queued',attempts=?,available_at=0 WHERE id=?",
+              [Math.max(0, interrupted.attempts - 1), interrupted.id],
+            );
+            if (interrupted.link_id && this.store.get(interrupted.link_id))
+              this.store.update(interrupted.link_id, { state: "queued" });
+          })();
+        }
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[worker]", message);
       if (job) {
@@ -154,7 +179,9 @@ export class Worker {
     }
   }
   private async requireOllama() {
-    if (!(await this.services.ollamaStatus()).online)
+    const status = await this.services.ollamaStatus();
+    this.ensureRunning();
+    if (!status.online)
       throw new OllamaUnavailable(
         "Waiting for local Ollama to become available. Start Ollama; this job will resume automatically.",
       );
@@ -206,6 +233,7 @@ export class Worker {
         "Find only synonymous tags, spelling variants, acronyms with the exact same meaning, or singular/plural duplicates. Do not merge broader/narrower or merely related topics. Source and target must both be supplied existing tag names. Prefer the more commonly used name as target. Suggest merges for user review, with a short reason. Return an empty list if none.",
         { tags: batch },
       );
+      this.ensureRunning();
       for (const s of result.suggestions)
         if (names.has(s.source) && names.has(s.target) && s.source !== s.target)
           this.store.suggest(s.source, s.target, s.reason);

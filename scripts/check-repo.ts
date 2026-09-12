@@ -155,6 +155,7 @@ export function checkRepository(root: string) {
     "docs/standards.md",
     "bun.lock",
     "scraper/uv.lock",
+    "src-tauri/Cargo.lock",
     ".github/workflows/verify.yml",
   ];
   for (const path of required)
@@ -184,7 +185,7 @@ export function checkRepository(root: string) {
   if (tracked.exitCode !== 0) issues.push("Cannot inspect Git tracking state.");
   for (const path of tracked.stdout.toString().split("\0"))
     if (
-      /^(?:data\/|dist\/|node_modules\/|\.browsers\/|scraper\/\.venv\/|\.env(?:$|\.))/.test(
+      /^(?:\.desktop-build\/|src-tauri\/(?:target|resources|gen)\/|data\/|dist\/|node_modules\/|\.browsers\/|scraper\/\.venv\/|\.env(?:$|\.))/.test(
         path,
       ) &&
       path !== ".env.example"
@@ -193,7 +194,9 @@ export function checkRepository(root: string) {
         `Live data, dependencies, build output or secrets must not be tracked: ${path}`,
       );
   const source = repositoryFiles(root).filter((path) =>
-    /^(?:src|server|scripts|tests|docs|scraper|\.github)\//.test(path),
+    /^(?:src|src-tauri|desktop|server|scripts|tests|docs|scraper|\.github)\//.test(
+      path,
+    ),
   );
   const ignored = Bun.spawnSync(
     ["git", "check-ignore", "--no-index", "--stdin"],
